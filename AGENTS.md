@@ -45,7 +45,7 @@ The live run against managed Outpost is done (see README). Ask the user before s
 
 ## Outpost gaps this demo surfaced
 
-Outpost: no endpoint verification handshake; 410/413 retried (no non-retryable status codes); no destination expiry; no delivery-time SSRF blocklist and redirects followed (open source build); publish is per tenant with project-wide event ids; no delivery-status summary; unmatched events are never stored (blocks a poll mode on `GET /events`); credentials-only updates (secret rotation) ignored by the cached publisher while the destination stays busy (outpost#1084, fixed on main by #1085, not yet released or on managed as of 2026-10-01).
+Outpost: no endpoint verification handshake; 410/413 retried (no non-retryable status codes); no destination expiry; no delivery-time SSRF blocklist and redirects followed in Outpost's own client (mitigation: route through an SSRF-filtering egress proxy with `DESTINATIONS_PROXY_URL`, outpost#1100, merged 2026-09-30, unreleased); publish is per tenant with project-wide event ids; no delivery-status summary; unmatched events are never stored (blocks a poll mode on `GET /events`); credentials-only updates (secret rotation) ignored by the cached publisher while the destination stays busy (outpost#1084, fixed on main by #1085, not yet released or on managed as of 2026-10-01).
 `hookdeck listen` (the Hookdeck CLI) can't front the test subscriber: Event Gateway sources answer with a static response, so the MCP Events challenge fails. Use `npm run tunnel` instead.
 
 ## Working conventions
