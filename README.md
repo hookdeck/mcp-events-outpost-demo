@@ -6,19 +6,7 @@ MCP Events is a draft MCP extension that lets an agent subscribe to things happe
 
 **Status:** demo code, not production-ready. Tested end to end against managed Outpost, and with ChatGPT as the subscriber, on 2026-10-01. See [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
 
-## What it looks like
-
-ChatGPT subscribes to `order.created` for orders of 100 USD or more. An order is placed, Outpost delivers the signed MCP event to ChatGPT, and ChatGPT runs its task:
-
-![Animation: ChatGPT's task with no runs; the Outpost dashboard shows a new order.created delivery to ChatGPT's webhook succeed with 200; the delivered MCP event body; then ChatGPT's task run summarizing the order](docs/images/mcp-events-chatgpt-demo.gif)
-
-The same flow as stills. When a 150 USD order was placed, Outpost delivered the signed MCP event to ChatGPT:
-
-![Hookdeck Outpost dashboard showing a successful delivery of an order.created MCP event to ChatGPT, with the event body: eventId, name, timestamp, the order data, and cursor](docs/images/outpost-delivery-to-chatgpt.png)
-
-And ChatGPT ran the task it was given for each matching order:
-
-![ChatGPT's Scheduled view showing the task run: Demo Customer placed order ord_f5df80071641 for 1 item totalling 150 USD](docs/images/chatgpt-scheduled-run.png)
+![Animation: ChatGPT's task triggered by order.created; the Hookdeck Outpost dashboard shows a new delivery to ChatGPT's webhook succeed with 200; the delivered MCP event body; then ChatGPT's task run summarizing the order](docs/images/mcp-events-chatgpt-demo.gif)
 
 ## How it works
 
@@ -385,7 +373,11 @@ ChatGPT can subscribe to this server's `order.created` event, receive deliveries
 
    ![ChatGPT's Edit task dialog: the task instructions, Trigger set to Demo Store (MCP Events), and Event set to order.created](docs/images/chatgpt-task-trigger.png)
 
-5. Place orders with `npm run order`. Task runs appear under **Scheduled** in ChatGPT, not in the chat (see [What it looks like](#what-it-looks-like)). Each delivery also shows in the Outpost dashboard under **Deliveries**, filtered by tenant `mcp_chatgpt`.
+5. Place orders with `npm run order`. Each delivery shows in the Outpost dashboard under **Deliveries** (filter by tenant `mcp_chatgpt`), and the task runs appear under **Scheduled** in ChatGPT, not in the chat.
+
+   ![Hookdeck Outpost dashboard: deliveries for tenant mcp_chatgpt, with the newest order.created delivery to ChatGPT's webhook marked Success (200) and its MCP event body: the order ord_26959ee4ee8e for 220 USD](docs/images/outpost-delivery-to-chatgpt.png)
+
+   ![ChatGPT's Scheduled view: the task's last run reads New order ord_26959ee4ee8e from Demo Customer contains 1 item totalling US$220, with the earlier 175 USD run below](docs/images/chatgpt-scheduled-run.png)
 6. Delete the task in **Scheduled** to unsubscribe. Then stop the tunnel.
 
 ### Results against OpenAI's checklist
