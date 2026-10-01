@@ -8,7 +8,11 @@ MCP Events is a draft MCP extension that lets an agent subscribe to things happe
 
 ## What it looks like
 
-ChatGPT subscribed to `order.created` for orders of 100 USD or more. When a 150 USD order was placed, Outpost delivered the signed MCP event to ChatGPT:
+ChatGPT subscribes to `order.created` for orders of 100 USD or more. An order is placed, Outpost delivers the signed MCP event to ChatGPT, and ChatGPT runs its task:
+
+![Animation: ChatGPT's task with no runs; the Outpost dashboard shows a new order.created delivery to ChatGPT's webhook succeed with 200; the delivered MCP event body; then ChatGPT's task run summarizing the order](docs/images/mcp-events-chatgpt-demo.gif)
+
+The same flow as stills. When a 150 USD order was placed, Outpost delivered the signed MCP event to ChatGPT:
 
 ![Hookdeck Outpost dashboard showing a successful delivery of an order.created MCP event to ChatGPT, with the event body: eventId, name, timestamp, the order data, and cursor](docs/images/outpost-delivery-to-chatgpt.png)
 
