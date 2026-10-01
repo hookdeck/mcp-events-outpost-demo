@@ -6,6 +6,16 @@ MCP Events is a draft MCP extension that lets an agent subscribe to things happe
 
 **Status:** demo code, not production-ready. Tested end to end against managed Outpost, and with ChatGPT as the subscriber, on 2026-10-01. See [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
 
+## What it looks like
+
+ChatGPT subscribed to `order.created` for orders of 100 USD or more. When a 150 USD order was placed, Outpost delivered the signed MCP event to ChatGPT:
+
+![Hookdeck Outpost dashboard showing a successful delivery of an order.created MCP event to ChatGPT, with the event body: eventId, name, timestamp, the order data, and cursor](docs/images/outpost-delivery-to-chatgpt.png)
+
+And ChatGPT ran the task it was given for each matching order:
+
+![ChatGPT's Scheduled view showing the task run: Demo Customer placed order ord_f5df80071641 for 1 item totalling 150 USD](docs/images/chatgpt-scheduled-run.png)
+
 ## How it works
 
 1. **An agent subscribes.** It calls `events/subscribe` on the MCP server with the event it wants (`order.created`), optional filters (orders of 100 USD or more), a callback URL, and a signing secret it chose.
@@ -360,8 +370,18 @@ ChatGPT can subscribe to this server's `order.created` event, receive deliveries
 
 2. Expose it: `npm run tunnel -- --port 3000`. Copy the `/mcp` URL it prints.
 3. In ChatGPT, go to [Plugins](https://chatgpt.com/plugins), choose **Add > Create MCP App**, paste the URL, choose **No Authentication**, and create it. This needs Developer mode (Plus or above). OpenAI's docs place the toggle under **Settings > Security and login**, but it's been seen under **Settings > Plugins**, at the bottom of the page. If **Create MCP App** appears in the **Add** menu, it's already on.
+
+   <img src="docs/images/chatgpt-create-mcp-app.png" alt="ChatGPT Plugins page with the Add menu open, showing Create plugin, Upload plugin archive, and Create MCP App" width="400">
+
 4. Start a **Work** chat (MCP Events don't run in plain chats), type `@`, pick the app, and ask it to subscribe, for example: "Subscribe to new orders of 100 USD or more. When one arrives, summarise the order in one sentence." ChatGPT may ask for an existing order ID first; create one with `npm run order -- --total 50 --currency USD` and give it the `orderId`.
-5. Place orders with `npm run order`. Task runs appear under **Scheduled** in ChatGPT, not in the chat.
+
+   ![A ChatGPT Work chat: ChatGPT asks for an existing order ID to verify access, then confirms the subscription and shows a Summarise new orders task that is Monitoring](docs/images/chatgpt-subscribe-chat.png)
+
+   The subscription becomes a task with the MCP event as its trigger:
+
+   ![ChatGPT's Edit task dialog: the task instructions, Trigger set to Demo Store (MCP Events), and Event set to order.created](docs/images/chatgpt-task-trigger.png)
+
+5. Place orders with `npm run order`. Task runs appear under **Scheduled** in ChatGPT, not in the chat (see [What it looks like](#what-it-looks-like)). Each delivery also shows in the Outpost dashboard under **Deliveries**, filtered by tenant `mcp_chatgpt`.
 6. Delete the task in **Scheduled** to unsubscribe. Then stop the tunnel.
 
 ### Results against OpenAI's checklist
