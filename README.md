@@ -112,7 +112,7 @@ To have ChatGPT subscribe instead of the test client, follow [Try it with ChatGP
 - [Configuration](#configuration): Outpost project setup, client options, environment variables.
 - [Tests](#tests).
 - [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
-- [Outpost gaps found](#outpost-gaps-found) and [What was verified](#what-was-verified-and-what-was-assumed-about-managed-outpost): what this demo taught us about Outpost.
+- [Outpost: what it handles and what's open](#outpost-what-it-handles-and-whats-open) and [What was verified](#what-was-verified-and-what-was-assumed-about-managed-outpost): what this demo taught us about Outpost.
 - [Where the spec and OpenAI's guide differ](#where-the-spec-and-openais-guide-differ).
 - [Try it with ChatGPT](#try-it-with-chatgpt): steps, results, and what ChatGPT actually sends.
 - [Project layout](#project-layout).
@@ -196,7 +196,7 @@ Outpost sends the published `data` as the HTTP body, unchanged. So the server pu
 { "data": { "data": { "total": { "$gte": 100 }, "currency": "USD" } } }
 ```
 
-The server does the parts Outpost doesn't: the verification handshake, callback URL checks, deterministic ids and idempotent upsert, and expiring subscriptions (see [Outpost gaps](#outpost-gaps-found)).
+The server does the parts Outpost doesn't: the verification handshake, callback URL checks, deterministic ids and idempotent upsert, and expiring subscriptions (see [What your MCP server handles](#what-your-mcp-server-handles)).
 
 ## Tenancy and publishing
 
@@ -266,7 +266,7 @@ npm run typecheck   # tsc --noEmit
 
 ## Known issues
 
-- **Secret rotation on a busy destination.** On managed Outpost, if a destination gets a delivery at least once a minute, deliveries keep being signed with the old secret after a rotation, until the destination is idle for a minute. A subscriber that rotates twice in that time stops accepting deliveries. Fixed in Outpost by [#1085](https://github.com/hookdeck/outpost/pull/1085), not yet released or deployed to managed. Details in [Outpost gaps](#outpost-gaps-found), item 8.
+- **Secret rotation on a busy destination.** On managed Outpost, if a destination gets a delivery at least once a minute, deliveries keep being signed with the old secret after a rotation, until the destination is idle for a minute. A subscriber that rotates twice in that time stops accepting deliveries. Fixed in Outpost by [#1085](https://github.com/hookdeck/outpost/pull/1085), not yet released or deployed to managed. Details in [Open Outpost issues](#open-outpost-issues), item 2.
 
 ## What's demo-only
 
@@ -279,30 +279,49 @@ npm run typecheck   # tsc --noEmit
 - **`/demo/orders` is unauthenticated** and the orders live in memory.
 - **The verification cache is in memory**, so a restart re-verifies on the next subscribe. Verification POSTs are not rate-limited per host.
 
-## Outpost gaps found
+## Outpost: what it handles and what's open
 
-These started from reading the Outpost source and OpenAPI spec (a local checkout of `hookdeck/outpost`). Items 5 and 8 were then checked against a live managed project on 2026-10-01 (see [What was verified](#what-was-verified-and-what-was-assumed-about-managed-outpost)). Items 1, 2, 3, and 6 are API-shape gaps that the managed API confirms by omission: there is no handshake, expiry, or non-retryable-status setting in the destination schema or the Config API.
+Running MCP Events on Outpost splits the work three ways: what Outpost does as the delivery layer, what the platform running Outpost provides, and what the MCP server does because it's specific to MCP Events. Only the last group of items below are asks of Outpost itself. Findings come from Outpost's source (`main` as of 2026-10-01), its OpenAPI spec, and live tests against a managed project (see [What was verified](#what-was-verified-and-what-was-assumed-about-managed-outpost)).
 
-1. **No endpoint verification handshake.** Outpost delivers to any URL it's given. MCP Events requires proving the endpoint wants the deliveries before activating, so the server sends the signed `verification` challenge itself and only then creates the destination.
-2. **410 and 413 are retried.** Outpost retries every failed attempt while the retry budget lasts, regardless of status code. MCP Events (and OpenAI) say `410 Gone` and `413 Payload Too Large` must not be retried. The server can't change this; it needs an Outpost option to treat some status codes as final.
-3. **Destinations don't expire.** MCP subscriptions are TTL-scoped, so the server runs a sweeper (`SWEEP_INTERVAL_MS`, 30 seconds by default) that deletes expired destinations. Until the sweep runs, an expired subscription can still receive an event. A destination `expires_at` in Outpost would close that window.
-4. **Delivery-time SSRF protection.** MCP Events wants the delivery path to block non-public addresses at connect time and never follow redirects. The server checks the callback at subscribe time and on the verification request, but deliveries go through Outpost, so an MCP server can't enforce this at delivery time itself.
-   - **In Outpost's own code:** the webhook HTTP client uses Go's default redirect policy (follows up to 10), and there's no private-address blocklist.
-   - **The mitigation:** route deliveries through an SSRF-filtering egress proxy. Outpost [#1100](https://github.com/hookdeck/outpost/pull/1100) (merged 2026-09-30) adds `DESTINATIONS_PROXY_URL`, an HTTP CONNECT proxy for webhook, RabbitMQ, and Kafka destinations, and reports a proxy deny (for example an Envoy RBAC rule acting as the egress SSRF gate) as a `network_unreachable` attempt rather than an infrastructure error. It replaces the webhook-only `DESTINATIONS_WEBHOOK_PROXY_URL`, now deprecated.
-   - **Release status:** #1100 is on `main` but not in a release yet (the latest is v1.5.0, 2026-09-23), so it isn't available on managed Outpost as of 2026-10-01. Redirect handling is still up to the proxy.
-5. **Publish is per tenant and event ids are project-wide**, which shapes the fan-out described in [Tenancy and publishing](#tenancy-and-publishing). Confirmed on managed, with two sharp edges:
-   - Publishing an id already used for another tenant returns `202` with `duplicate: true` and is never delivered, but `destination_ids` still lists the second tenant's matching destinations. A caller reading only `destination_ids` would think it was delivered.
-   - A publish that matched no destination doesn't record its id: publishing the same id again returns `duplicate: false`.
-6. **No delivery status summary.** `deliveryStatus` is assembled from `disabled_at` and the latest attempt; there is no "last success" or failure-rate field. If `ALERT_AUTO_DISABLE_DESTINATION` is on, a refresh re-enables the destination, which matches the spec's "a successful refresh reactivates delivery".
-7. **Extra headers.** Outpost also sends `webhook-topic` (and any publish `metadata` as headers). Harmless; the MCP delivery profile only requires the four headers it lists.
-8. **Rotated secrets aren't picked up by a busy destination.** Found live on managed, root cause read in the source. Outpost's delivery path caches a publisher per destination, and the publisher holds the signing secrets. The cache key (`MakePublisherKey` in `internal/destregistry/registry.go`) hashes the destination id, `config`, and `type`, but not `credentials`. Entries live for `defaultPublisherTTL` (1 minute), and every cache hit resets that minute (`internal/lru/lru.go`). So after a credentials-only `PATCH`, a destination that gets at least one delivery a minute keeps signing with the old secret, indefinitely:
+### What Outpost handles
+
+- **Signing:** Standard Webhooks mode with admin-set `whsec_` secrets, `webhook-id` equal to the event id and stable across retries, and a fresh timestamp and signature on every attempt.
+- **Secret rotation:** dual-signing with `previous_secret` (`v1,<new> v1,<old>`) until `previous_secret_invalid_at` (but see [the rotation issue](#open-outpost-issues) below).
+- **Filtering:** destination filters evaluate the subscription's `arguments`, so non-matching events are never sent.
+- **Per-subscription destinations:** caller-chosen destination ids (the subscription id) and per-destination custom headers (`X-MCP-Subscription-Id`).
+- **Retries and logs:** a configurable retry schedule, and delivery attempts you can query and inspect in the dashboard.
+
+Outpost also sends `webhook-topic` (and any publish `metadata`) as headers. That's harmless: the MCP delivery profile only requires the four headers it lists.
+
+### What your MCP server handles
+
+These are specific to MCP Events or easy for the server to own. The demo implements each one in [`src/server/subscriptions.ts`](src/server/subscriptions.ts) and [`src/server/callback.ts`](src/server/callback.ts).
+
+- **The endpoint verification challenge.** MCP Events requires proving the endpoint wants deliveries before activating a subscription, and the challenge format and echo rules are MCP-specific. The server also has to return `-32015 CallbackEndpointError` synchronously from `events/subscribe`. So the server sends the signed `verification` challenge itself and only then creates the destination.
+- **Subscription expiry.** Subscriptions are TTL-scoped and refreshed by the client. The server runs a sweeper (`SWEEP_INTERVAL_MS`, 30 seconds by default) that deletes expired destinations. An expired subscription can still receive an event until the sweep runs; a destination `expires_at` in Outpost would close that window, but it isn't needed.
+- **Fan-out across principals.** Outpost's publish API takes one `tenant_id` and its event ids are idempotency keys across the whole project, so the server publishes one copy per tenant with a live subscription, each with its own event id (see [Tenancy and publishing](#tenancy-and-publishing)).
+- **`deliveryStatus` on refresh.** Assembled from the destination's `disabled_at` and its latest attempt. If `ALERT_AUTO_DISABLE_DESTINATION` is on, a refresh re-enables the destination, which matches the spec's "a successful refresh reactivates delivery".
+- **Callback URL checks at subscribe time** (https only, public addresses, no redirects) on the subscribe and verification requests.
+- **Poll mode, if you want it.** Outpost only stores events that matched a destination, so an `events/poll` implementation should keep its own event log. ChatGPT doesn't use poll, and this demo doesn't implement it.
+
+### What the platform running Outpost handles
+
+- **Delivery-time SSRF protection.** MCP Events wants the delivery path to block non-public addresses at connect time and never follow redirects. An MCP server can't enforce that for connections Outpost makes, and Outpost's own webhook client follows redirects (Go's default, up to 10) and has no private-address blocklist. The fix is egress infrastructure: route deliveries through an SSRF-filtering proxy. Outpost [#1100](https://github.com/hookdeck/outpost/pull/1100) (merged 2026-09-30) adds `DESTINATIONS_PROXY_URL`, an HTTP CONNECT proxy for webhook, RabbitMQ, and Kafka destinations, and reports a proxy deny (for example an Envoy RBAC rule acting as the egress SSRF gate) as a `network_unreachable` attempt. It replaces the webhook-only `DESTINATIONS_WEBHOOK_PROXY_URL`, now deprecated. #1100 isn't in a release yet (the latest is v1.5.0, 2026-09-23), so it isn't available on managed Outpost as of 2026-10-01.
+
+### Open Outpost issues
+
+1. **`410` and `413` are retried.** Outpost retries every failed attempt while the retry budget lasts, whatever the status code (any status of 400 or above is a failed attempt, and the retry decision only checks the attempt count). MCP Events and OpenAI say `410 Gone` and `413 Payload Too Large` must not be retried. Nothing outside Outpost can stop those retries, so this needs an option to treat some status codes as final.
+2. **Rotated secrets aren't picked up by a busy destination.** Found live on managed, root cause read in the source. Outpost's delivery path caches a publisher per destination, and the publisher holds the signing secrets. The cache key (`MakePublisherKey` in `internal/destregistry/registry.go`) hashes the destination id, `config`, and `type`, but not `credentials`. Entries live for `defaultPublisherTTL` (1 minute), and every cache hit resets that minute (`internal/lru/lru.go`). So after a credentials-only `PATCH`, a destination that gets at least one delivery a minute keeps signing with the old secret, indefinitely:
    - After a rotation, deliveries 15 and 35 seconds later carried one signature, from the **previous** secret only, although `GET` returned the new `secret`, `previous_secret`, and `previous_secret_invalid_at`.
    - After the cache had been idle for over a minute, the next delivery was correctly dual-signed.
    - A subscriber that rotates again while the stale publisher is still warm stops accepting deliveries: neither of its two accepted secrets is the one Outpost is still using. The MCP server can't see this happening.
 
    `previous_secret_invalid_at` itself is applied at signing time (`destwebhook/signature.go`), so the old signature does drop out on schedule once the publisher has the new credentials. This is [hookdeck/outpost#1084](https://github.com/hookdeck/outpost/issues/1084), fixed on `main` by [#1085](https://github.com/hookdeck/outpost/pull/1085) (merged 2026-09-28, credentials now part of the key). The latest server release, v1.5.0 (2026-09-23), predates the fix, and managed Outpost still showed the bug on 2026-10-01. Until the fix is deployed, a server-side workaround would be to change something in `config` on rotation, such as a custom header carrying a secret version, to force a new cache key; the demo doesn't do this.
 
-What fits well: admin-set secrets in `whsec_` format, previous-secret dual-signing (`v1,<a> v1,<b>`, once the cached publisher refreshes; see item 8), `webhook-id` equal to the event id and stable across retries, a fresh timestamp and signature per attempt, per-destination custom headers, caller-chosen destination ids, and filters.
+3. **API sharp edges around publish idempotency.** Outpost matches destinations before checking the event id, which leaves two surprises (both reproduced on managed):
+   - Publishing an event id already used (for any tenant) returns `202` with `duplicate: true` and isn't delivered, but `destination_ids` still lists the matching destinations. A caller reading only `destination_ids` would think it was delivered.
+   - A publish that matched no destination doesn't record its id, so publishing the same id again later returns `duplicate: false`.
+4. **The managed version isn't exposed by the API.** The dashboard shows it (v1.5.0 at the time of testing), but there's no way to check from code which fixes are live.
 
 ## What was verified and what was assumed about managed Outpost
 
@@ -325,7 +344,7 @@ Verified live against managed Outpost (2026-10-01), using the admin API directly
 - **Attempt ordering.** `GET .../attempts` defaults to `order_by: time, dir: desc`, and `?limit=1` returns the newest attempt. Attempt `code` is a string such as `dns_error` or `connection_refused` (an HTTP status for HTTP failures). The server maps codes it doesn't recognize, including `dns_error`, to `connection_refused`.
 - **Retries.** With `eligible_for_retry: true` and the managed defaults (`RETRY_INTERVAL_SECONDS=30`, `MAX_RETRY_LIMIT=10`, no `RETRY_SCHEDULE`), the second attempt came 30 seconds after the first (later attempts weren't observed). Up to 10 retries is more than the 3 to 5 attempts MCP Events suggests, so set `RETRY_SCHEDULE` (see [Outpost project setup](#outpost-project-setup), step 5).
 - **Destination limit.** A new managed project has `MAX_DESTINATIONS_PER_TENANT=20`. Destination 21 returns `400 {"message":"maximum number of destinations per tenant reached"}`. That matches the server's `/maximum number of destinations/i` check, so a principal over the limit gets `-32013 ResourceExhausted` as intended (not the generic 500 the open source handler suggested).
-- **Project-wide event ids**: see gap 5.
+- **Project-wide event ids**: see [Open Outpost issues](#open-outpost-issues), item 3.
 
 Verified end to end on managed (2026-10-01), with the MCP server on localhost and the test subscriber's receiver behind a `cloudflared` quick tunnel, following the [Quickstart](#quickstart):
 
@@ -333,12 +352,12 @@ Verified end to end on managed (2026-10-01), with the MCP server on localhost an
 - **Standard mode delivery.** Deliveries passed the `standardwebhooks` library's signature and 5-minute freshness checks. `X-MCP-Subscription-Id` from `custom_headers` matched the subscription, `webhook-id` equaled the body's `eventId`, and the body parsed as the published envelope.
 - **Filters on the wire.** 150 USD was delivered; 20 USD and 500 EUR returned `destination_ids: []` and were never sent.
 - **`deliveryStatus` on refresh** carried `lastDeliveryAt` from the attempts API.
-- **Rotation**, with `SECRET_ROTATION_GRACE_MS=120000`, `--rotate-secret`, and `--debug`: Outpost sends `v1,<current> v1,<previous>` (current first) during the grace window, and only `v1,<current>` after `previous_secret_invalid_at`, including from a warm cached publisher. But a busy destination doesn't pick up the rotation at all until its cached publisher expires (gap 8).
+- **Rotation**, with `SECRET_ROTATION_GRACE_MS=120000`, `--rotate-secret`, and `--debug`: Outpost sends `v1,<current> v1,<previous>` (current first) during the grace window, and only `v1,<current>` after `previous_secret_invalid_at`, including from a warm cached publisher. But a busy destination doesn't pick up the rotation at all until its cached publisher expires ([Open Outpost issues](#open-outpost-issues), item 2).
 
 Still assumed:
 
-- Delivery-time SSRF behavior on managed Outpost (gap 4).
-- Retry timing beyond the second attempt, and `410`/`413` handling on managed (gap 2 is from the source).
+- Delivery-time SSRF behavior on managed Outpost (see [What the platform running Outpost handles](#what-the-platform-running-outpost-handles)).
+- Retry timing beyond the second attempt, and `410`/`413` handling on managed ([Open Outpost issues](#open-outpost-issues), item 1, is from the source).
 - More generally, that the rest of managed Outpost behaves like the local source checkout (last commit July 2026).
 
 ## Where the spec and OpenAI's guide differ
