@@ -57,6 +57,7 @@ Bucketed as in README "Outpost: what it handles and what's open":
 - `ALLOW_LOCAL_CALLBACKS=true` is for the mock/tests only.
 - `.env` holds a real Outpost API key. Don't print it or commit it.
 - Writing (README, docs, posts): American English, developer-to-developer, no hype, short paragraphs, **no em dashes**, no horizontal rules.
+- Mermaid diagrams: render every changed diagram before committing, for example extract the block to a `.mmd` file and run `npx -y @mermaid-js/mermaid-cli -i diagram.mmd -o diagram.svg`. Don't use `;` inside labels (Mermaid treats it as a statement separator).
 - Git: small focused commits. Don't push or add a remote without asking the user.
 - Never post to Slack or other external channels on the user's behalf; draft and show instead.
 
