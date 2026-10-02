@@ -239,6 +239,8 @@ The MCP server itself stays on localhost; only the receiver needs to be public. 
 | `--rotate-secret` | Generate a new secret on every refresh, to watch dual-signed deliveries |
 | `--skip-timestamp-check` | Accept deliveries older than 5 minutes (signatures are still verified) |
 | `--keep-subscription` | Don't unsubscribe on exit, to watch the sweeper remove the destination after the TTL |
+| `--callback-url <url>` | Subscribe with this exact callback URL, for example an Event Gateway source that answers the verification challenge and forwards deliveries to the receiver with `hookdeck listen`. The receiver then accepts deliveries on any path |
+| `--secret <whsec_...>` | Use this signing secret instead of generating one (also `SUBSCRIBER_SECRET`), for example the secret the Event Gateway source is configured with. Can't be combined with `--rotate-secret` |
 | `--debug` | Log every `webhook-signature` entry and whether it matches the current secret, the previous one, or neither. With `--rotate-secret`, this shows dual-signing during the grace window and the old signature dropping out after it |
 
 ### Environment variables

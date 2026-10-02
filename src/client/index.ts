@@ -17,6 +17,8 @@ const { values } = parseArgs({
     'skip-timestamp-check': { type: 'boolean', default: false },
     'keep-subscription': { type: 'boolean', default: false },
     debug: { type: 'boolean', default: false },
+    'callback-url': { type: 'string' },
+    secret: { type: 'string' },
   },
 });
 
@@ -35,6 +37,8 @@ const subscriber = new Subscriber({
   ttlMs: values['ttl-ms'] ? Number(values['ttl-ms']) : undefined,
   receiverPort: Number(process.env.RECEIVER_PORT ?? 4000),
   publicCallbackUrl: resolvePublicCallbackUrl(process.env.PUBLIC_CALLBACK_URL),
+  callbackUrl: values['callback-url'],
+  secret: values.secret ?? (process.env.SUBSCRIBER_SECRET || undefined),
   checkTimestamps: !values['skip-timestamp-check'],
   rotateSecretOnRefresh: values['rotate-secret'],
   debug: values.debug,

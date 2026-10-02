@@ -186,6 +186,36 @@ describe('MCP Events over Outpost, end to end', () => {
     await expect(rawClient('wrong-token')).rejects.toThrow();
   });
 
+  it('subscribes with an external callback URL and a fixed secret (a forwarding gateway in front of the receiver)', async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = http.createServer().listen(0, () => {
+        const { port } = probe.address() as { port: number };
+        probe.close(() => resolve(port));
+      });
+    });
+    const secret = generateWebhookSecret();
+    const received: McpEvent[] = [];
+    const subscriber = new Subscriber({
+      serverUrl,
+      token: 'tok-bob',
+      eventName: 'order.created',
+      receiverPort: port,
+      // A gateway would forward to its own path; the receiver must accept it.
+      callbackUrl: `http://localhost:${port}/forwarded/by/gateway`,
+      secret,
+      onEvent: (event) => received.push(event),
+      log: () => {},
+    });
+    const sub = await subscriber.start();
+    expect(subscriber.callbackUrl).toBe(`http://localhost:${port}/forwarded/by/gateway`);
+    expect(outpost.destinations.get(sub.id)!.credentials.secret).toBe(secret);
+    await placeOrder({ total: 42, currency: 'USD' });
+    await waitFor(() => received.length === 1);
+    await subscriber.stop();
+    expect(() => new Subscriber({ serverUrl, token: 'x', eventName: 'order.created', secret: 'nope' })).toThrow(/whsec_/);
+    expect(() => new Subscriber({ serverUrl, token: 'x', eventName: 'order.created', secret, rotateSecretOnRefresh: true })).toThrow(/cannot be combined/);
+  });
+
   it('rejects requests with no token unless ANONYMOUS_PRINCIPAL is set', async () => {
     const noToken = () => new Client({ name: 'anon', version: '1' }, { versionNegotiation: { mode: 'auto' } });
     await expect(noToken().connect(new StreamableHTTPClientTransport(new URL(serverUrl)))).rejects.toThrow();

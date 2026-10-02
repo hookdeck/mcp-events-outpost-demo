@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { Webhook } from 'standardwebhooks';
 import * as z from 'zod';
-import { generateWebhookSecret } from '../shared/secret.js';
+import { generateWebhookSecret, isValidWebhookSecret } from '../shared/secret.js';
 import { matchSignatures } from '../shared/standard-webhooks.js';
 
 /*
@@ -31,6 +31,15 @@ export interface SubscriberOptions {
   receiverPort?: number;
   /** Public base URL that reaches the receiver (a tunnel). Defaults to http://localhost:<receiverPort>. */
   publicCallbackUrl?: string;
+  /**
+   * Subscribe with this exact callback URL instead of one pointing at the receiver,
+   * for example an Event Gateway source that answers the challenge and forwards
+   * deliveries to the receiver (with `hookdeck listen`). The receiver then accepts
+   * deliveries on any path.
+   */
+  callbackUrl?: string;
+  /** Use this `whsec_` secret instead of generating one, for example the secret an Event Gateway source is configured with. */
+  secret?: string;
   /** Reject deliveries whose webhook-timestamp is more than 5 minutes off. Default true. */
   checkTimestamps?: boolean;
   /** Generate a new secret on every refresh to exercise rotation. */
@@ -61,7 +70,7 @@ export class Subscriber {
   callbackUrl?: string;
 
   private receiver?: http.Server;
-  private secret = generateWebhookSecret();
+  private secret: string;
   /** Secrets the receiver accepts: the current one plus a recently rotated-out one. */
   private accepted: Array<{ secret: string; until: number }> = [];
   private readonly seenIds = new Set<string>();
@@ -71,6 +80,9 @@ export class Subscriber {
 
   constructor(private readonly options: SubscriberOptions) {
     this.log = options.log ?? ((message) => console.log(`[client] ${message}`));
+    if (options.secret && !isValidWebhookSecret(options.secret)) throw new Error('secret must be whsec_ followed by base64 of 24 to 64 bytes');
+    if (options.secret && options.rotateSecretOnRefresh) throw new Error('secret and rotateSecretOnRefresh cannot be combined');
+    this.secret = options.secret ?? generateWebhookSecret();
     this.accepted.push({ secret: this.secret, until: Infinity });
   }
 
@@ -82,7 +94,7 @@ export class Subscriber {
   async start(): Promise<SubscribeResponse> {
     const port = await this.startReceiver(this.options.receiverPort ?? 0);
     const base = (this.options.publicCallbackUrl || `http://localhost:${port}`).replace(/\/$/, '');
-    this.callbackUrl = `${base}${this.callbackPath}`;
+    this.callbackUrl = this.options.callbackUrl ?? `${base}${this.callbackPath}`;
     this.log(`receiver listening on :${port}, callback URL ${this.callbackUrl}`);
 
     const transport = new StreamableHTTPClientTransport(new URL(this.options.serverUrl), {
@@ -227,7 +239,8 @@ export class Subscriber {
       res.writeHead(status, { 'content-type': 'application/json' }).end(body === undefined ? '' : JSON.stringify(body));
 
     if (req.method !== 'POST') return send(405);
-    if (new URL(req.url ?? '/', 'http://localhost').pathname !== this.callbackPath) return send(404);
+    // With an external callback URL (a forwarding gateway), deliveries arrive on whatever path the forwarder uses.
+    if (!this.options.callbackUrl && new URL(req.url ?? '/', 'http://localhost').pathname !== this.callbackPath) return send(404);
 
     const chunks: Buffer[] = [];
     let size = 0;
