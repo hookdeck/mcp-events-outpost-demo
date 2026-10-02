@@ -167,8 +167,8 @@ sequenceDiagram
     S->>O: POST /publish {id: eventId, tenant_id, topic: order.created, data: MCP event envelope}
     O->>C: POST {eventId, name, timestamp, data, cursor} + webhook-id/-timestamp/-signature + X-MCP-Subscription-Id
     C-->>O: 200
-    C->>S: events/subscribe (same key, before refreshBefore; optional new secret)
-    S->>O: PATCH destination (expiry metadata; secret + previous_secret on rotation)
+    C->>S: events/subscribe (same key, before refreshBefore, optional new secret)
+    S->>O: PATCH destination (expiry metadata, plus secret and previous_secret on rotation)
     C->>S: events/unsubscribe {name, arguments, delivery: {url}}
     S->>O: DELETE destination
 ```
