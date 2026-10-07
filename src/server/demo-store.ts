@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { ORDER_CREATED, type Order } from './events.js';
-import type { OutpostClient, PublishResponse } from './outpost.js';
+import type { Outpost } from '@hookdeck/outpost-sdk';
+import type { PublishResponse } from '@hookdeck/outpost-sdk/models/components';
 import type { SubscriptionService } from './subscriptions.js';
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -19,7 +20,7 @@ export interface PublishedCopy extends PublishResponse {
 /**
  * A fake store. Placing an order publishes `order.created` to Outpost.
  *
- * Tenancy: Outpost's publish API takes one `tenant_id`, and each subscriber
+ * Tenancy: Outpost's publish API takes one `tenantId`, and each subscriber
  * principal is its own tenant, so an order is published once per tenant that
  * has a live `order.created` subscription. Within a tenant, Outpost fans the
  * event out to every destination (subscription) whose topic and filter match.
@@ -30,7 +31,7 @@ export class DemoStore {
   private readonly orders = new Map<string, Order>();
 
   constructor(
-    private readonly outpost: OutpostClient,
+    private readonly outpost: Outpost,
     private readonly subscriptions: SubscriptionService,
     private readonly log: (message: string) => void = () => {},
   ) {}
@@ -62,14 +63,14 @@ export class DemoStore {
       if (Buffer.byteLength(JSON.stringify(envelope)) > MAX_BODY_BYTES) throw new Error('Event body exceeds 256 KiB');
       const response = await this.outpost.publish({
         id: eventId,
-        tenant_id: tenantId,
+        tenantId,
         topic: ORDER_CREATED,
-        eligible_for_retry: true,
-        time: order.createdAt,
+        eligibleForRetry: true,
+        time: new Date(order.createdAt),
         data: envelope,
       });
       published.push({ tenantId, ...response });
-      this.log(`published ${eventId} to ${tenantId}: ${response.destination_ids.length} matching destination(s)`);
+      this.log(`published ${eventId} to ${tenantId}: ${response.destinationIds.length} matching destination(s)`);
     }
     return { order, published };
   }

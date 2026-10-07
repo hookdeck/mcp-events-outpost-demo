@@ -49,7 +49,7 @@ const config = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
 
 const placeOrder = async (order: Record<string, unknown>) => {
   const response = await fetch(`${storeUrl}/demo/orders`, { method: 'POST', body: JSON.stringify(order) });
-  return (await response.json()) as { order: { orderId: string }; published: Array<{ tenantId: string; id: string; destination_ids: string[] }> };
+  return (await response.json()) as { order: { orderId: string }; published: Array<{ tenantId: string; id: string; destinationIds: string[] }> };
 };
 
 async function rawClient(token: string) {
@@ -110,7 +110,7 @@ describe('MCP Events over Outpost, end to end', () => {
 
     // A matching order is published and delivered, signed, with MCP's body shape.
     const { order, published } = await placeOrder({ total: 150, currency: 'USD', customerName: 'Ada' });
-    expect(published).toEqual([expect.objectContaining({ tenantId: 'mcp_alice', destination_ids: [sub.id] })]);
+    expect(published).toEqual([expect.objectContaining({ tenantId: 'mcp_alice', destinationIds: [sub.id] })]);
     await waitFor(() => received.length === 1);
     const [{ event, headers }] = received as [typeof received[0]];
     expect(event).toMatchObject({ name: 'order.created', cursor: null, data: { orderId: order.orderId, total: 150, currency: 'USD' } });
@@ -122,8 +122,8 @@ describe('MCP Events over Outpost, end to end', () => {
     // A non-matching order is filtered out by Outpost.
     const small = await placeOrder({ total: 50, currency: 'USD' });
     const euro = await placeOrder({ total: 500, currency: 'EUR' });
-    expect(small.published[0]!.destination_ids).toEqual([]);
-    expect(euro.published[0]!.destination_ids).toEqual([]);
+    expect(small.published[0]!.destinationIds).toEqual([]);
+    expect(euro.published[0]!.destinationIds).toEqual([]);
     await sleep(100);
     expect(received).toHaveLength(1);
 
@@ -290,6 +290,41 @@ describe('MCP Events over Outpost, end to end', () => {
     await client.close();
     await subscriber.stop();
     expect(outpost.destinations.has(first.id)).toBe(false);
+  });
+
+  it('refreshes an existing destination when the server has lost its store, instead of duplicating it', async () => {
+    const original = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
+    const sub = await original.start();
+
+    // A second server with an empty store, against the same Outpost: create hits "destination already exists".
+    const fresh = createApp(config(), { log: () => {} });
+    const freshUrl = `http://localhost:${await fresh.listen(0)}/mcp`;
+    const again = new Subscriber({
+      serverUrl: freshUrl,
+      token: 'tok-bob',
+      eventName: 'order.created',
+      callbackUrl: original.callbackUrl,
+      secret: original.currentSecret,
+      log: () => {},
+    });
+    const resubscribed = await again.start();
+    expect(resubscribed.id).toBe(sub.id);
+    expect([...outpost.destinations.values()].filter((d) => d.config.url === original.callbackUrl)).toHaveLength(1);
+
+    await again.stop({ unsubscribe: false });
+    await fresh.close();
+    await original.stop();
+  });
+
+  it('returns ResourceExhausted when the tenant is at its Outpost destination limit', async () => {
+    const subscriber = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
+    outpost.maxDestinationsPerTenant = 0;
+    try {
+      await expect(subscriber.start()).rejects.toMatchObject({ code: -32013 });
+    } finally {
+      outpost.maxDestinationsPerTenant = 20;
+      await subscriber.stop({ unsubscribe: false });
+    }
   });
 
   it('sweeps expired subscriptions from Outpost', async () => {

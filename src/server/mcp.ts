@@ -14,9 +14,9 @@ export function buildMcpServer(deps: { subscriptions: SubscriptionService; store
   const { subscriptions, store, principal } = deps;
   // `events` is not in the SDK's ServerCapabilities type yet, hence the cast.
   const capabilities = { events: {} } as ServerCapabilities;
-  const server = new McpServer({ name: 'mcp-events-outpost-demo', version: '0.1.0' }, { capabilities });
+  const mcpServer = new McpServer({ name: 'mcp-events-outpost-demo', version: '0.1.0' }, { capabilities });
 
-  server.registerTool(
+  mcpServer.registerTool(
     'get_order',
     {
       description: 'Look up an order in the demo store by id, for example one referenced by an order.created event.',
@@ -30,17 +30,19 @@ export function buildMcpServer(deps: { subscriptions: SubscriptionService; store
     },
   );
 
+  // McpServer has no API for custom methods, so register them on the low-level Server it wraps.
+  const { server } = mcpServer;
   const anyParams = z.record(z.string(), z.unknown());
 
-  server.server.setRequestHandler('events/list', { params: anyParams.optional() }, async () => ({ events: eventCatalog }));
+  server.setRequestHandler('events/list', { params: anyParams.optional() }, async () => ({ events: eventCatalog }));
 
-  server.server.setRequestHandler('events/subscribe', { params: anyParams }, async (params) => ({
+  server.setRequestHandler('events/subscribe', { params: anyParams }, async (params) => ({
     ...(await subscriptions.subscribe(principal, params)),
   }));
 
-  server.server.setRequestHandler('events/unsubscribe', { params: anyParams }, async (params) =>
+  server.setRequestHandler('events/unsubscribe', { params: anyParams }, async (params) =>
     subscriptions.unsubscribe(principal, params),
   );
 
-  return server;
+  return mcpServer;
 }

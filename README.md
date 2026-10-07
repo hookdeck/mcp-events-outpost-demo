@@ -109,6 +109,7 @@ To have ChatGPT subscribe instead of the test client, follow [Try it with ChatGP
 - [Architecture](#architecture): components and the full message flow.
 - [How MCP Events maps onto Outpost](#how-mcp-events-maps-onto-outpost) and [Tenancy and publishing](#tenancy-and-publishing): the design choices.
 - [MCP protocol version and SDK](#mcp-protocol-version-and-sdk).
+- [Outpost SDK](#outpost-sdk).
 - [Configuration](#configuration): Outpost project setup, client options, environment variables.
 - [Tests](#tests).
 - [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
@@ -208,7 +209,7 @@ The more Outpost-native alternative is a single tenant for the whole MCP server,
 
 - SDK: `@modelcontextprotocol/server` 2.2.0, `@modelcontextprotocol/client` 2.2.0, `@modelcontextprotocol/node` 2.1.0. This is the v2 line of the official TypeScript SDK, which replaces the monolithic `@modelcontextprotocol/sdk` package. The latest v1 (`@modelcontextprotocol/sdk` 1.31.0) does not serve the 2026-07-28 revision.
 - Protocol: the server serves **2026-07-28** (what ChatGPT requires) through the SDK's `createMcpHandler`, which also answers `server/discover`. 2025-era clients fall back to the SDK's stateless legacy serving. The end-to-end test asserts that the test client negotiates `2026-07-28`.
-- The SDK has no MCP Events support. The server declares `capabilities.events` (cast, because the SDK's capability type doesn't know it) and registers `events/list`, `events/subscribe`, and `events/unsubscribe` as custom request handlers. On the client side the SDK's typed `getServerCapabilities()` drops the unknown `events` key, so the test client reads `server/discover` directly.
+- The SDK has no MCP Events support. The server declares `capabilities.events` (cast, because the SDK's capability type doesn't know it) and registers `events/list`, `events/subscribe`, and `events/unsubscribe` as custom request handlers on the low-level `Server` that `McpServer` wraps (`mcpServer.server`). On the client side the SDK's typed `getServerCapabilities()` drops the unknown `events` key, so the test client reads `server/discover` directly.
 
 ## Configuration
 
@@ -457,6 +458,12 @@ What that involves:
   - **Run your own.** For example, Cloudflare's [`workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider) in the same Worker as the MCP server, with CIMD enabled, which is how ChatGPT then registers. This avoids depending on a provider's CIMD and DCR support.
   - **Use a hosted identity provider.** OpenAI's docs link [Auth0](https://github.com/openai/openai-mcpkit/blob/main/python-authenticated-mcp-server-scaffold/README.md#2-configure-auth0-authentication) and Stytch. Check how the provider handles CIMD, DCR, and the RFC 8707 `resource` parameter before committing. Auth0, for example, needs its [Resource Parameter Compatibility Profile](https://auth0.com/ai/docs/mcp/guides/resource-param-compatibility-profile) turned on, and supports CIMD clients only by manual import.
 
+## Outpost SDK
+
+- The server calls Outpost through the [Outpost TypeScript SDK](https://www.npmjs.com/package/@hookdeck/outpost-sdk) (`@hookdeck/outpost-sdk` 1.7.0): `tenants.upsert`, `destinations.create/get/update/enable/delete/listAttempts`, and `publish`. Errors are matched with the SDK's `BadRequestError`, `NotFoundError` and `OutpostError`. All of these were checked against managed Outpost on 2026-10-07.
+- `npm run outpost:check` calls `GET/PATCH /config` with `fetch` instead. In SDK 1.7.0, `configuration.getManagedConfig()` throws `ResponseValidationError` on managed Outpost, because the API returns `null` for unset keys and the SDK's schema expects a string.
+- The SDK depends on `@modelcontextprotocol/sdk` (v1) for its own bundled MCP server, so that package appears in the lockfile next to this demo's v2 packages. The demo doesn't import it.
+
 ## Project layout
 
 ```
@@ -466,9 +473,8 @@ src/
     index.ts       entry point (npm run server)
     app.ts         HTTP routing: /mcp (bearer auth), /demo/orders, sweeper
     mcp.ts         MCP server: events capability, events/* handlers, get_order tool
-    subscriptions.ts  subscribe, refresh, rotate, unsubscribe, sweep (Outpost-backed)
+    subscriptions.ts  subscribe, refresh, rotate, unsubscribe, sweep (Outpost SDK calls)
     callback.ts    callback URL rules (SSRF) and the verification challenge
-    outpost.ts     minimal Outpost admin API client
     events.ts      event catalog and arguments-to-filter mapping
     identity.ts    subscription id, tenant id
     demo-store.ts  fake store that publishes order.created

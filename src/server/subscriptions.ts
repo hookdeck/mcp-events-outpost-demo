@@ -12,7 +12,9 @@ import {
 } from './errors.js';
 import { ORDER_CREATED, argumentsToOutpostFilter, findEvent, orderCreatedArguments } from './events.js';
 import { deriveSubscriptionId, hashSecret, tenantIdFor, verificationKey } from './identity.js';
-import { OutpostError, type OutpostAttempt, type OutpostClient } from './outpost.js';
+import type { Outpost } from '@hookdeck/outpost-sdk';
+import type { Attempt, DestinationUpdate } from '@hookdeck/outpost-sdk/models/components';
+import { BadRequestError, NotFoundError, OutpostError } from '@hookdeck/outpost-sdk/models/errors';
 import type { SubscriptionRecord, SubscriptionStore } from './store.js';
 import { isValidWebhookSecret } from '../shared/secret.js';
 
@@ -33,7 +35,7 @@ export interface SubscribeResult {
 export interface SubscriptionServiceDeps {
   config: ServerConfig;
   store: SubscriptionStore;
-  outpost: OutpostClient;
+  outpost: Outpost;
   verify?: (options: VerifyEndpointOptions) => Promise<VerificationResult>;
   now?: () => Date;
   log?: (message: string) => void;
@@ -60,7 +62,7 @@ export function describeParams(params: Params): string {
   return JSON.stringify({ ...params, delivery: { ...delivery, secret: `<${shape}>` } });
 }
 
-function attemptToError(attempt: OutpostAttempt | null): CallbackFailureReason | null {
+function attemptToError(attempt: Attempt | undefined): CallbackFailureReason | null {
   if (!attempt || attempt.status === 'success') return null;
   const code = String(attempt.code ?? '');
   if (/^5\d\d$/.test(code)) return 'http_5xx';
@@ -169,7 +171,7 @@ export class SubscriptionService {
 
     try {
       if (!this.knownTenants.has(tenantId)) {
-        await outpost.upsertTenant(tenantId, { mcp_principal: principal });
+        await outpost.tenants.upsert(tenantId, { metadata: { mcp_principal: principal } });
         this.knownTenants.add(tenantId);
       }
       const metadata = { mcp_principal: principal, mcp_event: event.name, mcp_expires_at: isoSeconds(expiresAt) };
@@ -180,7 +182,7 @@ export class SubscriptionService {
           deliveryStatus = await this.refreshDestination(tenantId, id, secret, existing?.secretHash, metadata, now);
         } catch (error) {
           // The destination was removed in Outpost behind our back: recreate it.
-          if (!(error instanceof OutpostError && error.status === 404)) throw error;
+          if (!(error instanceof NotFoundError)) throw error;
           await create();
         }
       }
@@ -226,18 +228,18 @@ export class SubscriptionService {
     metadata: Record<string, string>,
   ): Promise<boolean> {
     try {
-      await this.deps.outpost.createDestination(tenantId, {
+      await this.deps.outpost.destinations.create(tenantId, {
         id,
         type: 'webhook',
         topics: [topic],
         filter: argumentsToOutpostFilter(orderCreatedArguments.parse(args)),
-        config: { url, custom_headers: JSON.stringify({ 'X-MCP-Subscription-Id': id }) },
+        config: { url, customHeaders: JSON.stringify({ 'X-MCP-Subscription-Id': id }) },
         credentials: { secret },
         metadata,
       });
       return true;
     } catch (error) {
-      if (error instanceof OutpostError && error.status === 400 && /already exists/i.test(error.body)) return false;
+      if (error instanceof BadRequestError && /already exists/i.test(error.body)) return false;
       throw error;
     }
   }
@@ -252,38 +254,39 @@ export class SubscriptionService {
     now: Date,
   ): Promise<DeliveryStatus> {
     const { outpost, config } = this.deps;
-    const patch: Record<string, unknown> = { type: 'webhook', metadata };
+    const patch: DestinationUpdate = { type: 'webhook', metadata };
 
     if (knownSecretHash !== hashSecret(secret)) {
-      const current = await outpost.getDestination(tenantId, id);
-      const previous = current?.credentials.secret;
+      const current = await outpost.destinations.get(tenantId, id);
+      const previous = current.type === 'webhook' ? current.credentials.secret : undefined;
       patch.credentials =
         previous && previous !== secret
           ? {
               secret,
-              previous_secret: previous,
-              previous_secret_invalid_at: isoSeconds(new Date(now.getTime() + config.secretRotationGraceMs)),
+              previousSecret: previous,
+              previousSecretInvalidAt: new Date(now.getTime() + config.secretRotationGraceMs),
             }
           : { secret };
       if (previous && previous !== secret) this.log(`rotated secret for ${id}`);
     }
 
-    const destination = await outpost.updateDestination(tenantId, id, patch);
-    if (destination.disabled_at) {
+    const destination = await outpost.destinations.update(tenantId, id, patch);
+    if (destination.disabledAt) {
       // A refresh is the subscriber's liveness signal: resume delivery.
-      await outpost.enableDestination(tenantId, id);
+      await outpost.destinations.enable(tenantId, id);
       this.log(`re-enabled ${id}`);
     }
 
-    let attempt: OutpostAttempt | null = null;
+    let attempt: Attempt | undefined;
     try {
-      attempt = await outpost.latestAttempt(tenantId, id);
+      const { models } = await outpost.destinations.listAttempts({ tenantId, destinationId: id, limit: 1 });
+      attempt = models?.[0];
     } catch {
       // deliveryStatus is optional; don't fail a refresh over it
     }
     return {
       active: true,
-      lastDeliveryAt: attempt?.status === 'success' ? attempt.time : null,
+      lastDeliveryAt: attempt?.status === 'success' && attempt.time ? attempt.time.toISOString() : null,
       lastError: attemptToError(attempt),
     };
   }
@@ -296,7 +299,7 @@ export class SubscriptionService {
     const id = deriveSubscriptionId(principal, url.href, event.name, args);
     const tenantId = tenantIdFor(this.deps.config.tenantPrefix, principal);
     try {
-      await this.deps.outpost.deleteDestination(tenantId, id);
+      await this.deleteDestination(tenantId, id);
     } catch (error) {
       this.log(`Outpost error deleting ${id}: ${(error as Error).message}`);
       throw internalError('Failed to remove delivery');
@@ -306,6 +309,15 @@ export class SubscriptionService {
     return {};
   }
 
+  /** Deletes a destination; one that's already gone (404) counts as deleted. */
+  private async deleteDestination(tenantId: string, destinationId: string): Promise<void> {
+    try {
+      await this.deps.outpost.destinations.delete(tenantId, destinationId);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
+  }
+
   /** TTL sweeper: Outpost destinations don't expire, so delete them once the grant lapses. */
   async sweep(): Promise<string[]> {
     const now = this.now().getTime();
@@ -313,7 +325,7 @@ export class SubscriptionService {
     for (const record of this.deps.store.all()) {
       if (Date.parse(record.expiresAt) > now) continue;
       try {
-        await this.deps.outpost.deleteDestination(record.tenantId, record.destinationId);
+        await this.deleteDestination(record.tenantId, record.destinationId);
         this.deps.store.delete(record.id);
         removed.push(record.id);
         this.log(`expired ${record.id}`);

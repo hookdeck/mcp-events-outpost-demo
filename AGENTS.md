@@ -19,7 +19,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 
 ## Status (2026-10-01)
 
-- Server, test client, scripts and tests are done. 93 tests pass (`npm test`), `npm run typecheck` is clean. All offline against `test/mock-outpost.ts`.
+- Server, test client, scripts and tests are done. 96 tests pass (`npm test`), `npm run typecheck` is clean. All offline against `test/mock-outpost.ts`.
 - **Run end to end against managed Outpost (2026-10-01)**, with the receiver behind a quick tunnel (`npm run tunnel`). Opening a tunnel exposes the machine to the internet, so ask the user before starting one. README "verified vs assumed" has the results. The project is in Standard mode with topic `order.created`. Found a new Outpost gap: rotated secrets aren't used by a busy destination's cached publisher (README gap 8).
 - **ChatGPT tested end to end (2026-10-01)** in developer mode with No Authentication (`ANONYMOUS_PRINCIPAL`), MCP server behind `npm run tunnel -- --port 3000`. Subscribe, verification, Outpost delivery, task run, filtering, and unsubscribe all worked. Results and what ChatGPT sends (callback host, no `ttlMs`, access check via a tool before subscribing) are in README "Try it with ChatGPT".
 - Published at https://github.com/hookdeck/mcp-events-outpost-demo.
@@ -31,6 +31,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 - **Publish the full MCP envelope as Outpost `data`** so the delivered body is exactly the MCP event. Consequence: filters address `data.data.<field>` (e.g. `data.data.total`).
 - **Verification challenge is done by the server** before creating the destination (Outpost has no handshake). Callback URL SSRF checks happen at subscribe time and on the challenge request; redirects are not followed.
 - **TTL sweeper** deletes expired destinations (Outpost has no expiry).
+- **Outpost SDK** (`@hookdeck/outpost-sdk`) for every Outpost call except the Config API (`scripts/outpost-check.ts` uses `fetch`; SDK 1.7.0 can't parse managed Outpost's config response). The mock still speaks Outpost's snake_case wire format; its responses must pass the SDK's schema validation (for example `created_at`/`updated_at` on destinations).
 - **Secret rotation** uses Outpost `previous_secret` + `previous_secret_invalid_at` (`SECRET_ROTATION_GRACE_MS`) so Outpost dual-signs.
 - **MCP SDK v2** (`@modelcontextprotocol/server|client|node`). The SDK has no Events support: `capabilities.events` is cast, `events/*` are custom request handlers, and the client reads `server/discover` directly. Protocol `2026-07-28` is served.
 - **Follow OpenAI where it differs from the spec** (see README section). Don't add `gap`/`terminated`/poll/stream unless asked; ChatGPT doesn't use them.
@@ -46,7 +47,7 @@ The live run against managed Outpost is done (see README). Ask the user before s
 ## Outpost gaps this demo surfaced
 
 Bucketed as in README "Outpost: what it handles and what's open":
-- **Open Outpost issues:** 410/413 retried (no non-retryable status codes); rotated secrets ignored by a busy destination's cached publisher (outpost#1084, fixed by #1085 in v1.6.0; managed runs v1.6.0 as of 2026-10-07, so resolved); `destination_ids` reported on duplicate publishes and unmatched publishes not recording the event id; managed version not exposed by the API.
+- **Open Outpost issues:** 410/413 retried (no non-retryable status codes); rotated secrets ignored by a busy destination's cached publisher (outpost#1084, fixed by #1085 in v1.6.0; managed runs v1.6.0 as of 2026-10-07, so resolved); `destination_ids` reported on duplicate publishes and unmatched publishes not recording the event id; managed version not exposed by the API; Outpost TypeScript SDK 1.7.0 `ManagedConfig` schema rejects the `null` values managed `/config` returns.
 - **Platform (whoever runs Outpost):** delivery-time SSRF. Outpost's client follows redirects and has no private-address blocklist; the fix is an SSRF-filtering egress proxy via `DESTINATIONS_PROXY_URL` (outpost#1100, released in v1.6.0).
 - **MCP server:** verification challenge, subscription expiry (sweeper), fan-out across tenants with per-tenant event ids, `deliveryStatus` assembly, subscribe-time callback checks, poll storage (not implemented).
 `hookdeck listen` (the Hookdeck CLI) can't front the test subscriber: Event Gateway sources answer with a static response, so the MCP Events challenge fails. Use `npm run tunnel` instead.

@@ -1,7 +1,29 @@
 import http from 'node:http';
 import { signStandardWebhook } from '../src/shared/standard-webhooks.js';
 import { isValidWebhookSecret } from '../src/shared/secret.js';
-import type { OutpostDestination, PublishRequest } from '../src/server/outpost.js';
+/** Outpost's wire format (snake_case), as in its OpenAPI spec. The demo calls it through the Outpost SDK. */
+export interface OutpostDestination {
+  id: string;
+  type: string;
+  topics: string[] | '*';
+  filter?: Record<string, unknown> | null;
+  config: { url: string; custom_headers?: string };
+  credentials: { secret?: string; previous_secret?: string; previous_secret_invalid_at?: string };
+  metadata?: Record<string, string> | null;
+  disabled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublishRequest {
+  id: string;
+  tenant_id: string;
+  topic: string;
+  eligible_for_retry: boolean;
+  time?: string;
+  metadata?: Record<string, string>;
+  data: Record<string, unknown>;
+}
 
 /*
  * A tiny stand-in for Hookdeck Outpost's admin API: just the endpoints the
@@ -51,6 +73,8 @@ export class MockOutpost {
   readonly published: PublishRequest[] = [];
   readonly deliveries: MockDelivery[] = [];
   readonly requests: string[] = [];
+  /** Managed Outpost's `MAX_DESTINATIONS_PER_TENANT` (20 on a new project). */
+  maxDestinationsPerTenant = 20;
   private readonly seenEventIds = new Set<string>();
   private readonly server: http.Server;
   baseUrl = '';
@@ -102,9 +126,13 @@ export class MockOutpost {
 
       if (req.method === 'POST' && !destId) {
         if (this.destinations.has(body.id)) return send(400, { message: 'destination already exists' });
+        if ([...this.destinations.values()].filter((d) => d.tenant_id === tenantId).length >= this.maxDestinationsPerTenant) {
+          return send(400, { message: 'maximum number of destinations per tenant reached' });
+        }
         if (body.credentials?.secret && !isValidWebhookSecret(body.credentials.secret)) return send(422, { message: 'credentials.secret pattern' });
         if (body.config?.custom_headers) JSON.parse(body.config.custom_headers);
-        const created = { ...body, tenant_id: tenantId, disabled_at: null };
+        const now = new Date().toISOString();
+        const created = { credentials: {}, ...body, tenant_id: tenantId, disabled_at: null, created_at: now, updated_at: now };
         this.destinations.set(body.id, created);
         return send(201, created);
       }

@@ -4,7 +4,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { ServerConfig } from './config.js';
 import { DemoStore, type PlaceOrderInput } from './demo-store.js';
 import { buildMcpServer } from './mcp.js';
-import { OutpostClient } from './outpost.js';
+import { Outpost } from '@hookdeck/outpost-sdk';
 import { SubscriptionStore } from './store.js';
 import { SubscriptionService, type SubscriptionServiceDeps } from './subscriptions.js';
 
@@ -26,7 +26,7 @@ export function createApp(
   overrides: Partial<Pick<SubscriptionServiceDeps, 'verify' | 'now'>> & { log?: (message: string) => void } = {},
 ): App {
   const log = overrides.log ?? ((message: string) => console.log(`[server] ${message}`));
-  const outpost = new OutpostClient(config.outpost.baseUrl, config.outpost.apiKey);
+  const outpost = new Outpost({ apiKey: config.outpost.apiKey, serverURL: config.outpost.baseUrl });
   const store = new SubscriptionStore(config.storeFile);
   const subscriptions = new SubscriptionService({ config, store, outpost, log, ...overrides });
   const demoStore = new DemoStore(outpost, subscriptions, log);

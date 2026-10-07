@@ -1,6 +1,5 @@
 import { parseArgs } from 'node:util';
 import { DEFAULT_OUTPOST_API_BASE_URL } from '../src/server/config.js';
-import { OutpostClient } from '../src/server/outpost.js';
 
 try {
   process.loadEnvFile();
@@ -13,16 +12,28 @@ try {
  *   DESTINATIONS_WEBHOOK_MODE=standard  and  `order.created` in TOPICS.
  * Also recommends a RETRY_SCHEDULE within MCP Events' guidance (3 to 5 attempts
  * over no more than 10 to 15 minutes); --apply sets it only if none is set.
- * Uses the managed-only Config API (GET/PATCH /config).
+ * Uses the managed-only Config API (GET/PATCH /config) directly: the Outpost SDK's
+ * `configuration` methods (v1.7.0) reject managed Outpost's response, which has
+ * `null` for unset keys where the SDK's schema expects a string.
  */
 const RECOMMENDED_RETRY_SCHEDULE = '30,120,600'; // 3 retries: 4 attempts within about 12.5 minutes
 const { values } = parseArgs({ options: { apply: { type: 'boolean', default: false } } });
 
 const apiKey = process.env.OUTPOST_API_KEY;
 if (!apiKey) throw new Error('OUTPOST_API_KEY is not set');
-const outpost = new OutpostClient((process.env.OUTPOST_API_BASE_URL || DEFAULT_OUTPOST_API_BASE_URL).replace(/\/$/, ''), apiKey);
+const baseUrl = (process.env.OUTPOST_API_BASE_URL || DEFAULT_OUTPOST_API_BASE_URL).replace(/\/$/, '');
 
-const config = await outpost.getConfig();
+async function configApi(method: 'GET' | 'PATCH', body?: Record<string, string>): Promise<Record<string, string | null>> {
+  const response = await fetch(`${baseUrl}/config`, {
+    method,
+    headers: { Authorization: `Bearer ${apiKey}`, ...(body && { 'Content-Type': 'application/json' }) },
+    body: body && JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Outpost ${method} /config failed with HTTP ${response.status}: ${await response.text()}`);
+  return (await response.json()) as Record<string, string | null>;
+}
+
+const config = await configApi('GET');
 const topics = (config.TOPICS ?? '').split(',').map((t) => t.trim()).filter(Boolean);
 const standardMode = config.DESTINATIONS_WEBHOOK_MODE === 'standard';
 const hasTopic = topics.includes('order.created') || topics.includes('*');
@@ -47,7 +58,7 @@ const update: Record<string, string> = {};
 if (!standardMode) update.DESTINATIONS_WEBHOOK_MODE = 'standard';
 if (!hasTopic) update.TOPICS = [...topics, 'order.created'].join(',');
 if (!retrySchedule) update.RETRY_SCHEDULE = RECOMMENDED_RETRY_SCHEDULE;
-const updated = await outpost.updateConfig(update);
+const updated = await configApi('PATCH', update);
 console.log(
   '\nUpdated:',
   JSON.stringify(update),
