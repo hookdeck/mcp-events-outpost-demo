@@ -385,11 +385,11 @@ ChatGPT can subscribe to this server's `order.created` event, receive deliveries
    ```
 
 2. Expose it: `npm run tunnel -- --port 3000`. Copy the `/mcp` URL it prints.
-3. In ChatGPT, go to [Plugins](https://chatgpt.com/plugins), choose **Add > Add custom MCP server** (called **Create MCP App** until early October 2026, as in the screenshot below), paste the URL, choose **No Authentication**, and select **Create as a plugin**. If ChatGPT says an app with that name already exists, pick another name. This needs Developer mode (Plus or above). OpenAI's docs place the toggle under **Settings > Security and login**, but it's been seen under **Settings > Plugins**, at the bottom of the page. If **Create MCP App** appears in the **Add** menu, it's already on.
+3. In ChatGPT, go to [Plugins](https://chatgpt.com/plugins), choose **Add > Add custom MCP server** (called **Create MCP App** until early October 2026, as in the screenshot below), paste the URL, choose **No Authentication**, and select **Create as a plugin**. If ChatGPT rejects the name because one already exists, pick another. This needs Developer mode (Plus or above). OpenAI's docs place the toggle under **Settings > Security and login**, but it's been seen under **Settings > Plugins**, at the bottom of the page. If **Create MCP App** appears in the **Add** menu, it's already on.
 
    <img src="docs/images/chatgpt-create-mcp-app.png" alt="ChatGPT Plugins page with the Add menu open, showing Create plugin, Upload plugin archive, and Create MCP App" width="400">
 
-4. Start a **Work** chat (MCP Events don't run in plain chats), type `@`, pick the app, and ask it to subscribe, for example: "Subscribe to new orders of 100 USD or more. When one arrives, summarise the order in one sentence." ChatGPT may ask for an existing order ID first; create one with `npm run order -- --total 50 --currency USD` and give it the `orderId`.
+4. Start a **Work** chat (MCP Events don't run in plain chats), type `@`, pick the plugin, and ask it to subscribe, for example: "Subscribe to new orders of 100 USD or more. When one arrives, summarise the order in one sentence." ChatGPT may ask for an existing order ID first; create one with `npm run order -- --total 50 --currency USD` and give it the `orderId`.
 
    ![A ChatGPT Work chat: ChatGPT asks for an existing order ID to verify access, then confirms the subscription and shows a Summarise new orders task that is Monitoring](docs/images/chatgpt-subscribe-chat.png)
 
@@ -429,7 +429,7 @@ Run with a 5-minute `SUBSCRIPTION_DEFAULT_TTL_MS` so refreshes show up quickly. 
 | Duplicate delivery | An Outpost manual retry (`POST /retry`, same `webhook-id`) got `200` from ChatGPT and didn't produce another run |
 | Burst | Four matching orders within 2 seconds became two runs: one for the first order, one batching the other three |
 | Invalid signature | A delivery signed with the wrong secret got `401` with "Invalid MCP webhook signature or body" |
-| Removing the app | Uninstalling it sent no `events/unsubscribe` and stopped the refreshes. Both subscriptions lapsed at their TTL and the sweeper deleted the destinations, so TTL is the only cleanup in this case. The tasks still showed "Monitoring" in Scheduled afterwards |
+| Removing the plugin | Uninstalling it sent no `events/unsubscribe` and stopped the refreshes. Both subscriptions lapsed at their TTL and the sweeper deleted the destinations, so TTL is the only cleanup in this case. The tasks still showed "Monitoring" in Scheduled afterwards |
 
 Not tested: revoked access to a subscribed resource (this demo has no per-user access model without OAuth), feedback loops (the task only reads), and ChatGPT's own retry and suspension behavior when deliveries fail.
 

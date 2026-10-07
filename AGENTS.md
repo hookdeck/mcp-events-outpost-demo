@@ -48,7 +48,7 @@ The live run against managed Outpost is done (see README). Ask the user before s
 Bucketed as in README "Outpost: what it handles and what's open":
 - **Open Outpost issues:** 410/413 retried (no non-retryable status codes); rotated secrets ignored by a busy destination's cached publisher (outpost#1084, fixed by #1085 in v1.6.0; managed runs v1.6.0 as of 2026-10-07, so resolved); `destination_ids` reported on duplicate publishes and unmatched publishes not recording the event id; managed version not exposed by the API.
 - **Platform (whoever runs Outpost):** delivery-time SSRF. Outpost's client follows redirects and has no private-address blocklist; the fix is an SSRF-filtering egress proxy via `DESTINATIONS_PROXY_URL` (outpost#1100, released in v1.6.0).
-- **App layer (the MCP server):** verification challenge, subscription expiry (sweeper), fan-out across tenants with per-tenant event ids, `deliveryStatus` assembly, subscribe-time callback checks, poll storage (not implemented).
+- **MCP server:** verification challenge, subscription expiry (sweeper), fan-out across tenants with per-tenant event ids, `deliveryStatus` assembly, subscribe-time callback checks, poll storage (not implemented).
 `hookdeck listen` (the Hookdeck CLI) can't front the test subscriber: Event Gateway sources answer with a static response, so the MCP Events challenge fails. Use `npm run tunnel` instead.
 
 ## Working conventions
@@ -57,6 +57,7 @@ Bucketed as in README "Outpost: what it handles and what's open":
 - `ALLOW_LOCAL_CALLBACKS=true` is for the mock/tests only.
 - `.env` holds a real Outpost API key. Don't print it or commit it.
 - Writing (README, docs, posts): American English, developer-to-developer, no hype, short paragraphs, **no em dashes**, no horizontal rules.
+- Terminology: don't write "app" or "apps". MCP Events is implemented by an **MCP server**; the product that sends webhooks is a **service** (GitHub, Shopify); what a user adds in ChatGPT is a **plugin**. Quote ChatGPT UI labels exactly, even when they say "App". Avoid vague placeholders such as "things" or "behind an MCP server": name the event, server, or service. Before committing docs, run `grep -nwiE 'apps?|things?|behind' README.md AGENTS.md` and check each hit.
 - Mermaid diagrams: render every changed diagram before committing, for example extract the block to a `.mmd` file and run `npx -y @mermaid-js/mermaid-cli -i diagram.mmd -o diagram.svg`. Don't use `;` inside labels (Mermaid treats it as a statement separator).
 - Git: small focused commits. Don't push or add a remote without asking the user.
 - Never post to Slack or other external channels on the user's behalf; draft and show instead.
