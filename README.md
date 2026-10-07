@@ -2,7 +2,7 @@
 
 A working demo of an MCP server that sends [MCP Events](https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/main/docs/design-sketch-proposal.md) webhooks, with [Hookdeck Outpost](https://hookdeck.com/docs/outpost) doing the delivery.
 
-MCP Events is a draft MCP extension that lets an agent subscribe to events from the systems behind an MCP server, such as a new order or a failed build, so it can react without a user in the loop. ChatGPT is the first real subscriber, and it uses webhook delivery only ([OpenAI's implementer guide](https://developers.openai.com/plugins/build/mcp-events)). This repo is for MCP server builders who want to offer MCP Events without building webhook delivery themselves.
+MCP Events is a draft MCP extension that lets an agent subscribe to events an MCP server exposes, such as a new order or a failed build, so it can react without a user in the loop. ChatGPT is the first real subscriber, and it uses webhook delivery only ([OpenAI's implementer guide](https://developers.openai.com/plugins/build/mcp-events)). This repo is for MCP server builders who want to offer MCP Events without building webhook delivery themselves.
 
 **Status:** demo code, not production-ready. Tested end to end against managed Outpost, and with ChatGPT as the subscriber, on 2026-10-01. See [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
 
