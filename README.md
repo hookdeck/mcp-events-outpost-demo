@@ -309,7 +309,7 @@ These are specific to MCP Events or easy for the server to own. The demo impleme
 
 ### What the platform running Outpost handles
 
-- **Delivery-time SSRF protection.** MCP Events wants the delivery path to block non-public addresses at connect time and never follow redirects. An MCP server can't enforce that for connections Outpost makes, and Outpost's own webhook client follows redirects (Go's default, up to 10) and has no private-address blocklist. The fix is egress infrastructure: route deliveries through an SSRF-filtering proxy. Outpost [#1100](https://github.com/hookdeck/outpost/pull/1100) (merged 2026-09-30) adds `DESTINATIONS_PROXY_URL`, an HTTP CONNECT proxy for webhook, RabbitMQ, and Kafka destinations, and reports a proxy deny (for example an Envoy RBAC rule acting as the egress SSRF gate) as a `network_unreachable` attempt. It replaces the webhook-only `DESTINATIONS_WEBHOOK_PROXY_URL`, now deprecated. #1100 shipped in v1.6.0 (2026-10-02), which managed Outpost runs as of 2026-10-07. Whether managed routes deliveries through an SSRF-gating proxy isn't documented.
+- **Delivery-time SSRF protection.** MCP Events wants the delivery path to block non-public addresses at connect time and never follow redirects. An MCP server can't enforce that for connections Outpost makes, and Outpost's own webhook client follows redirects (Go's default, up to 10) and has no private-address blocklist. The fix is egress infrastructure: route deliveries through an SSRF-filtering proxy. Outpost [#1100](https://github.com/hookdeck/outpost/pull/1100) (merged 2026-09-30) adds `DESTINATIONS_PROXY_URL`, an HTTP CONNECT proxy for webhook, RabbitMQ, and Kafka destinations, and reports a proxy deny (for example an Envoy RBAC rule acting as the egress SSRF gate) as a `network_unreachable` attempt. It replaces the webhook-only `DESTINATIONS_WEBHOOK_PROXY_URL`, now deprecated. #1100 shipped in v1.6.0 (2026-10-02), which managed Outpost runs as of 2026-10-07. Managed Outpost blocks delivery connections to private and link-local addresses at the network level, so redirects and DNS rebinding to internal addresses fail. On self-hosted Outpost, set `DESTINATIONS_PROXY_URL` to an SSRF-filtering proxy.
 
 ### Open Outpost issues
 
@@ -359,7 +359,7 @@ Verified end to end on managed (2026-10-01), with the MCP server on localhost an
 
 Still assumed:
 
-- Delivery-time SSRF behavior on managed Outpost (see [What the platform running Outpost handles](#what-the-platform-running-outpost-handles)).
+- Delivery-time SSRF blocking on managed Outpost (see [What the platform running Outpost handles](#what-the-platform-running-outpost-handles)). This demo didn't test a delivery to a private address.
 - Retry timing beyond the second attempt, and `410`/`413` handling on managed ([Open Outpost issues](#open-outpost-issues), item 1, is from the source).
 - More generally, that the rest of managed Outpost behaves like the local source checkout (last commit July 2026).
 
