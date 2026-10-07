@@ -17,12 +17,13 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 - Standard Webhooks: https://www.standardwebhooks.com/
 - Outpost source: https://github.com/hookdeck/outpost. Outpost docs: https://hookdeck.com/docs/outpost
 
-## Status (2026-10-01)
+## Status (2026-10-07)
 
 - Server, test client, scripts and tests are done. 96 tests pass (`npm test`), `npm run typecheck` is clean. All offline against `test/mock-outpost.ts`.
 - **Run end to end against managed Outpost (2026-10-01)**, with the receiver behind a quick tunnel (`npm run tunnel`). Opening a tunnel exposes the machine to the internet, so ask the user before starting one. README "verified vs assumed" has the results. The project is in Standard mode with topic `order.created`. Found a new Outpost gap: rotated secrets aren't used by a busy destination's cached publisher (README gap 8).
 - **ChatGPT tested end to end (2026-10-01)** in developer mode with No Authentication (`ANONYMOUS_PRINCIPAL`), MCP server behind `npm run tunnel -- --port 3000`. Subscribe, verification, Outpost delivery, task run, filtering, and unsubscribe all worked. Results and what ChatGPT sends (callback host, no `ttlMs`, access check via a tool before subscribing) are in README "Try it with ChatGPT".
 - Published at https://github.com/hookdeck/mcp-events-outpost-demo.
+- **Guide published (2026-10-07):** [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost), source in the hookdeck/website repo (`src/content/outpost-guides/2026-10-07_send-mcp-events-webhooks-with-outpost.mdoc`). Its code is fragments of this repo, so update the guide when the code it shows changes.
 
 ## Design decisions (keep unless there's a reason)
 
@@ -40,7 +41,8 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 ## Next steps (in rough priority)
 
 1. **ChatGPT checks:** done (README "More checks"), except revoked access (needs an access model/OAuth), feedback loops (n/a, read-only task) and ChatGPT's retry/suspension on failures. No OAuth by decision (README "Auth: what this demo skips").
-2. **Content:** explainer post and guide. Follow the writing conventions below.
+2. **Content:** the guide is done (see Status). An explainer post is undecided. A video is planned separately, with other MCP Events content. Follow the writing conventions below.
+3. **Outpost SDK config fix:** when an SDK release includes hookdeck/outpost#1133, switch `scripts/outpost-check.ts` from `fetch` to `configuration.getManagedConfig()`/`updateManagedConfig()`, drop the workaround notes (README "Outpost SDK", Design decisions above), and replace the guide's `curl` Config API step with the SDK.
 
 The live run against managed Outpost is done (see README). Ask the user before starting any of these.
 

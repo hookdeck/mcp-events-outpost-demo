@@ -4,6 +4,8 @@ A working demo of an MCP server that sends [MCP Events](https://github.com/model
 
 MCP Events is a draft MCP extension that lets an agent subscribe to events an MCP server exposes, such as a new order or a failed build, so it can react without a user in the loop. ChatGPT is the first real subscriber, and it uses webhook delivery only ([OpenAI's implementer guide](https://developers.openai.com/plugins/build/mcp-events)). This repo is for MCP server builders who want to offer MCP Events without building webhook delivery themselves.
 
+For a step-by-step walkthrough of this code, read the guide [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost).
+
 **Status:** demo code, not production-ready. Tested end to end against managed Outpost, and with ChatGPT as the subscriber, on 2026-10-01. See [Known issues](#known-issues) and [What's demo-only](#whats-demo-only).
 
 ![Animation: ChatGPT's task triggered by order.created; the Hookdeck Outpost dashboard shows a new delivery to ChatGPT's webhook succeed with 200; the delivered MCP event body; then ChatGPT's task run summarizing the order](docs/images/mcp-events-chatgpt-demo.gif)
@@ -106,6 +108,7 @@ To have ChatGPT subscribe instead of the test client, follow [Try it with ChatGP
 
 ## Going deeper
 
+- [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost): the guide built from this demo, step by step.
 - [Architecture](#architecture): components and the full message flow.
 - [How MCP Events maps onto Outpost](#how-mcp-events-maps-onto-outpost) and [Tenancy and publishing](#tenancy-and-publishing): the design choices.
 - [MCP protocol version and SDK](#mcp-protocol-version-and-sdk).
@@ -461,7 +464,7 @@ What that involves:
 ## Outpost SDK
 
 - The server calls Outpost through the [Outpost TypeScript SDK](https://www.npmjs.com/package/@hookdeck/outpost-sdk) (`@hookdeck/outpost-sdk` 1.7.0): `tenants.upsert`, `destinations.create/get/update/enable/delete/listAttempts`, and `publish`. Errors are matched with the SDK's `BadRequestError`, `NotFoundError` and `OutpostError`. All of these were checked against managed Outpost on 2026-10-07.
-- `npm run outpost:check` calls `GET/PATCH /config` with `fetch` instead. In SDK 1.7.0, `configuration.getManagedConfig()` throws `ResponseValidationError` on managed Outpost, because the API returns `null` for unset keys and the SDK's schema expects a string.
+- `npm run outpost:check` calls `GET/PATCH /config` with `fetch` instead. In SDK 1.7.0, `configuration.getManagedConfig()` throws `ResponseValidationError` on managed Outpost, because the API returns `null` for unset keys and the SDK's schema expects a string. The fix is [hookdeck/outpost#1133](https://github.com/hookdeck/outpost/pull/1133); once it's in an SDK release, the script can use the SDK too.
 - The SDK depends on `@modelcontextprotocol/sdk` (v1) for its own bundled MCP server, so that package appears in the lockfile next to this demo's v2 packages. The demo doesn't import it.
 
 ## Project layout
