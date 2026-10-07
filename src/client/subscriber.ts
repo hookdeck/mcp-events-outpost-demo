@@ -226,7 +226,8 @@ export class Subscriber {
       raw,
     );
     const summary = matches.map(({ secretIndex }, i) => `#${i + 1} ${secretIndex === -1 ? 'no match' : labels[secretIndex]}`).join(', ');
-    this.log(`debug ${headers['webhook-id']}: ${matches.length} signature(s): ${summary || 'none'}`);
+    const age = Math.round(Date.now() / 1000 - Number(headers['webhook-timestamp']));
+    this.log(`debug ${headers['webhook-id']}: ${matches.length} signature(s): ${summary || 'none'}; timestamp age ${age}s`);
   }
 
   private startReceiver(port: number): Promise<number> {

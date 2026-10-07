@@ -165,7 +165,7 @@ describe('MCP Events over Outpost, end to end', () => {
     await waitFor(() => received.length === 2);
     expect(String(received[1]!.headers['webhook-signature']).split(' ')).toHaveLength(2);
     // --debug shows which secret produced each entry; a verifier alone would pass with just the new one.
-    expect(logs).toContain(`debug ${received[1]!.event.eventId}: 2 signature(s): #1 current, #2 previous`);
+    expect(logs.some((line) => line.startsWith(`debug ${received[1]!.event.eventId}: 2 signature(s): #1 current, #2 previous; timestamp age `))).toBe(true);
 
     // Unsubscribe removes the destination; later orders are not published to this tenant.
     await subscriber.stop();

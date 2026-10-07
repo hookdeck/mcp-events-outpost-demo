@@ -38,7 +38,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 
 ## Next steps (in rough priority)
 
-1. **Remaining ChatGPT checks** (no OAuth: decided 2026-10-01 that the demo skips it; README "Auth: what this demo skips" has the notes): refresh before `refreshBefore` and across a server restart, duplicates, bursts/batching, revoked access, invalid signatures.
+1. **ChatGPT checks:** done (README "More checks"), except revoked access (needs an access model/OAuth), feedback loops (n/a, read-only task) and ChatGPT's retry/suspension on failures. No OAuth by decision (README "Auth: what this demo skips").
 2. **Content:** explainer post and guide. Follow the writing conventions below.
 
 The live run against managed Outpost is done (see README). Ask the user before starting any of these.
@@ -46,8 +46,8 @@ The live run against managed Outpost is done (see README). Ask the user before s
 ## Outpost gaps this demo surfaced
 
 Bucketed as in README "Outpost: what it handles and what's open":
-- **Open Outpost issues:** 410/413 retried (no non-retryable status codes); rotated secrets ignored by a busy destination's cached publisher (outpost#1084, fixed by #1085, unreleased; managed on v1.5.0); `destination_ids` reported on duplicate publishes and unmatched publishes not recording the event id; managed version not exposed by the API.
-- **Platform (whoever runs Outpost):** delivery-time SSRF. Outpost's client follows redirects and has no private-address blocklist; the fix is an SSRF-filtering egress proxy via `DESTINATIONS_PROXY_URL` (outpost#1100, merged 2026-09-30, unreleased).
+- **Open Outpost issues:** 410/413 retried (no non-retryable status codes); rotated secrets ignored by a busy destination's cached publisher (outpost#1084, fixed by #1085 in v1.6.0; managed runs v1.6.0 as of 2026-10-07, so resolved); `destination_ids` reported on duplicate publishes and unmatched publishes not recording the event id; managed version not exposed by the API.
+- **Platform (whoever runs Outpost):** delivery-time SSRF. Outpost's client follows redirects and has no private-address blocklist; the fix is an SSRF-filtering egress proxy via `DESTINATIONS_PROXY_URL` (outpost#1100, released in v1.6.0).
 - **App layer (the MCP server):** verification challenge, subscription expiry (sweeper), fan-out across tenants with per-tenant event ids, `deliveryStatus` assembly, subscribe-time callback checks, poll storage (not implemented).
 `hookdeck listen` (the Hookdeck CLI) can't front the test subscriber: Event Gateway sources answer with a static response, so the MCP Events challenge fails. Use `npm run tunnel` instead.
 
