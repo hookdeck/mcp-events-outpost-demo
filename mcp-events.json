@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "name": "order.created",
+      "description": "Fires when a new order is placed in the demo store. Optionally filter by currency, or to high-value orders (a total of 100 or more).",
+      "delivery": ["webhook"],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": ["USD", "EUR", "GBP"],
+            "description": "Only deliver orders in this currency."
+          },
+          "highValue": {
+            "type": "boolean",
+            "description": "true for orders with a total of 100 or more, false for the rest."
+          }
+        }
+      },
+      "payloadSchema": {
+        "type": "object",
+        "properties": {
+          "orderId": { "type": "string" },
+          "total": { "type": "number", "description": "Order total in major units, for example 129.99" },
+          "currency": { "type": "string" },
+          "highValue": { "type": "boolean", "description": "true when total is 100 or more" },
+          "itemCount": { "type": "integer" },
+          "customerName": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["orderId", "total", "currency", "highValue", "itemCount", "customerName", "createdAt"]
+      }
+    }
+  ]
+}

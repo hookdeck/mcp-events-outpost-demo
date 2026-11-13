@@ -2,57 +2,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * What the server remembers about a webhook subscription. The signing secret
- * itself lives only in Outpost (as the destination's credentials); we keep a
- * hash so a refresh can tell whether the subscriber rotated it.
+ * The Outpost tenants that have subscribed to something, so the demo store
+ * knows where to publish (Outpost's publish API takes one tenant). Outpost
+ * holds the subscriptions themselves: this is only a list of tenant IDs.
+ *
+ * A tenant stays listed after its subscriptions end. Publishing to it then
+ * matches nothing, which is harmless. On self-hosted Outpost with RediSearch,
+ * or on managed Outpost, `GET /tenants` (each tenant's `topics` includes the
+ * events it has subscriptions to) could replace this file.
  */
-export interface SubscriptionRecord {
-  id: string;
-  principal: string;
-  tenantId: string;
-  destinationId: string;
-  name: string;
-  arguments: Record<string, unknown>;
-  url: string;
-  secretHash: string;
-  expiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A Map with write-through persistence to a JSON file (or memory only when `file` is null). */
-export class SubscriptionStore {
-  private readonly records = new Map<string, SubscriptionRecord>();
+export class TenantRegistry {
+  private readonly tenants = new Set<string>();
 
   constructor(private readonly file: string | null) {
     if (file && fs.existsSync(file)) {
-      const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as SubscriptionRecord[];
-      for (const record of saved) this.records.set(record.id, record);
+      for (const id of JSON.parse(fs.readFileSync(file, 'utf8')) as string[]) this.tenants.add(id);
     }
   }
 
-  get(id: string) {
-    return this.records.get(id);
-  }
-
-  all() {
-    return [...this.records.values()];
-  }
-
-  put(record: SubscriptionRecord) {
-    this.records.set(record.id, record);
-    this.save();
-  }
-
-  delete(id: string) {
-    if (this.records.delete(id)) this.save();
-  }
-
-  private save() {
+  add(tenantId: string): void {
+    if (this.tenants.has(tenantId)) return;
+    this.tenants.add(tenantId);
     if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const temp = `${this.file}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(this.all(), null, 2));
-    fs.renameSync(temp, this.file);
+    const tmp = `${this.file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify([...this.tenants], null, 2));
+    fs.renameSync(tmp, this.file);
+  }
+
+  all(): string[] {
+    return [...this.tenants];
   }
 }
