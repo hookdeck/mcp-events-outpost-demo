@@ -1,19 +1,32 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { signStandardWebhook } from '../src/shared/standard-webhooks.js';
 import { isValidWebhookSecret } from '../src/shared/secret.js';
-/** Outpost's wire format (snake_case), as in its OpenAPI spec. The demo calls it through the Outpost SDK. */
-export interface OutpostDestination {
-  id: string;
-  type: string;
-  topics: string[] | '*';
-  filter?: Record<string, unknown> | null;
-  config: { url: string; custom_headers?: string };
-  credentials: { secret?: string; previous_secret?: string; previous_secret_invalid_at?: string };
-  metadata?: Record<string, string> | null;
-  disabled_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+
+/*
+ * A small stand-in for Hookdeck Outpost (v1.9.0) with MCP Events on: the
+ * endpoints the demo calls, with the status codes and `mcp_error` bodies real
+ * Outpost answers (checked against a local v1.9.0). What it copies:
+ *   - GET /mcp/events/list serves mcp-events.json
+ *   - subscribe validates, sends a signed verification challenge (cached per
+ *     tenant and callback URL), and stores the subscription; the same tenant,
+ *     event, arguments and URL refresh it (same id, new expiry, the old secret
+ *     keeps signing alongside the new one)
+ *   - ttlMs: omitted = 24 hours, null = no expiry, <= 0 = expired
+ *   - unsubscribe of an unknown subscription answers NotFound (-32023)
+ *   - publish matches a tenant's subscriptions by event name and argument
+ *     equality on top-level `data` fields, and delivers the MCP envelope with
+ *     a random `msg_` webhook-id per delivery, kept across retries
+ *   - 410 and 413 aren't retried
+ * Real Outpost also refuses non-https and non-public callback URLs unless
+ * insecure callbacks are allowed; the mock allows them, as a dev Outpost would.
+ */
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const definitions = JSON.parse(fs.readFileSync(new URL('../mcp-events.json', import.meta.url), 'utf8')) as {
+  events: Array<{ name: string; inputSchema?: { properties?: Record<string, { type: string }> } }>;
+};
 
 export interface PublishRequest {
   id: string;
@@ -25,56 +38,44 @@ export interface PublishRequest {
   data: Record<string, unknown>;
 }
 
-/*
- * A tiny stand-in for Hookdeck Outpost's admin API: just the endpoints the
- * demo calls. Deliveries mimic Outpost's Standard Webhooks mode
- * (internal/destregistry/providers/destwebhookstandard):
- *   - body = the published `data`, sent as-is
- *   - webhook-id = the event id (same on every retry)
- *   - webhook-timestamp / webhook-signature regenerated per attempt
- *   - one `v1,` signature per valid secret (current first, then previous)
- *   - custom_headers added, plus a webhook-topic header
- *   - every non-2xx is retried, including 410 and 413 (like Outpost today)
- * The filter matcher is a subset of Outpost's simplejsonmatch.
- */
+export interface MockSubscription {
+  id: string;
+  tenantId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  url: string;
+  secret: string;
+  previousSecret?: { secret: string; until: number };
+  expiresAt: number | null;
+}
 
 export interface MockDelivery {
   eventId: string;
-  destinationId: string;
+  subscriptionId: string;
   status: number;
   attempt: number;
   headers: Record<string, string>;
   body: string;
 }
 
-export function matchesFilter(value: unknown, schema: unknown): boolean {
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
-    return JSON.stringify(value) === JSON.stringify(schema);
+const sortedJson = (value: Record<string, unknown>) =>
+  JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))));
+
+class McpError extends Error {
+  constructor(readonly code: number, message: string, readonly data?: Record<string, unknown>) {
+    super(message);
   }
-  return Object.entries(schema as Record<string, unknown>).every(([key, expected]) => {
-    const n = value as number;
-    switch (key) {
-      case '$eq': return JSON.stringify(value) === JSON.stringify(expected);
-      case '$neq': return JSON.stringify(value) !== JSON.stringify(expected);
-      case '$gte': return typeof value === 'number' && n >= (expected as number);
-      case '$gt': return typeof value === 'number' && n > (expected as number);
-      case '$lte': return typeof value === 'number' && n <= (expected as number);
-      case '$lt': return typeof value === 'number' && n < (expected as number);
-      default:
-        if (key.startsWith('$')) throw new Error(`mock does not implement ${key}`);
-        return value !== null && typeof value === 'object' && matchesFilter((value as Record<string, unknown>)[key], expected);
-    }
-  });
 }
 
 export class MockOutpost {
   readonly tenants = new Set<string>();
-  readonly destinations = new Map<string, OutpostDestination & { tenant_id: string }>();
+  readonly subscriptions = new Map<string, MockSubscription>();
   readonly published: PublishRequest[] = [];
   readonly deliveries: MockDelivery[] = [];
-  readonly requests: string[] = [];
-  /** Managed Outpost's `MAX_DESTINATIONS_PER_TENANT` (20 on a new project). */
-  maxDestinationsPerTenant = 20;
+  readonly verifications: string[] = [];
+  /** Answer GET /mcp/events/list with this status instead (404 = MCP Events off, 503 = invalid definitions). */
+  listStatus = 200;
+  private readonly verified = new Set<string>();
   private readonly seenEventIds = new Set<string>();
   private readonly server: http.Server;
   baseUrl = '';
@@ -94,121 +95,171 @@ export class MockOutpost {
     return new Promise((resolve) => this.server.close(() => resolve()));
   }
 
-  /** Re-sends a past event to a destination (simulates an Outpost retry or manual retry). */
-  async redeliver(eventId: string, destinationId: string) {
-    const event = this.published.find((e) => e.id === eventId)!;
-    await this.deliver(event, this.destinations.get(destinationId)!);
+  /** Re-sends a past delivery with the same webhook-id (an Outpost retry). */
+  async redeliver(delivery: MockDelivery) {
+    const sub = this.subscriptions.get(delivery.subscriptionId)!;
+    await this.post(sub, delivery.headers['webhook-id']!, delivery.body, delivery.eventId);
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
-    const send = (status: number, body?: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(body === undefined ? '' : JSON.stringify(body));
+    const send = (status: number, body?: unknown) =>
+      res.writeHead(status, { 'content-type': 'application/json' }).end(body === undefined ? '' : JSON.stringify(body));
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined;
     const url = new URL(req.url!, 'http://x');
     const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-    this.requests.push(`${req.method} ${url.pathname}`);
 
     if (req.headers.authorization !== `Bearer ${this.apiKey}`) return send(401, { message: 'unauthorized' });
 
-    // PUT /tenants/:t
-    if (req.method === 'PUT' && parts.length === 2 && parts[0] === 'tenants') {
-      const existed = this.tenants.has(parts[1]!);
-      this.tenants.add(parts[1]!);
-      return send(existed ? 200 : 201, { id: parts[1] });
-    }
-
-    if (parts[0] === 'tenants' && parts[2] === 'destinations') {
-      const tenantId = parts[1]!;
-      if (!this.tenants.has(tenantId)) return send(404, { message: 'tenant not found' });
-      const destId = parts[3];
-      const dest = destId ? this.destinations.get(destId) : undefined;
-
-      if (req.method === 'POST' && !destId) {
-        if (this.destinations.has(body.id)) return send(400, { message: 'destination already exists' });
-        if ([...this.destinations.values()].filter((d) => d.tenant_id === tenantId).length >= this.maxDestinationsPerTenant) {
-          return send(400, { message: 'maximum number of destinations per tenant reached' });
-        }
-        if (body.credentials?.secret && !isValidWebhookSecret(body.credentials.secret)) return send(422, { message: 'credentials.secret pattern' });
-        if (body.config?.custom_headers) JSON.parse(body.config.custom_headers);
-        const now = new Date().toISOString();
-        const created = { credentials: {}, ...body, tenant_id: tenantId, disabled_at: null, created_at: now, updated_at: now };
-        this.destinations.set(body.id, created);
-        return send(201, created);
+    try {
+      if (req.method === 'GET' && url.pathname === '/mcp/events/list') {
+        if (this.listStatus !== 200) return send(this.listStatus, { message: 'unavailable' });
+        return send(200, { resultType: 'complete', ...definitions });
       }
-      if (!dest || dest.tenant_id !== tenantId) return send(404, { message: 'destination not found' });
-      if (req.method === 'GET' && parts.length === 4) return send(200, dest);
-      if (req.method === 'PATCH') {
-        if (body.type !== dest.type) return send(422, { message: 'type mismatch' });
-        Object.assign(dest, {
-          ...(body.topics && { topics: body.topics }),
-          ...(body.filter !== undefined && { filter: body.filter }),
-          ...(body.config && { config: { ...dest.config, ...body.config } }),
-          ...(body.credentials && { credentials: { ...body.credentials } }),
-          ...(body.metadata && { metadata: { ...dest.metadata, ...body.metadata } }),
-        });
-        return send(200, dest);
+      if (req.method === 'POST' && parts[0] === 'tenants' && parts[2] === 'mcp' && parts[3] === 'events') {
+        const tenantId = parts[1]!;
+        if (parts[4] === 'subscribe') return send(200, await this.subscribe(tenantId, body));
+        if (parts[4] === 'unsubscribe') return send(200, this.unsubscribe(tenantId, body));
       }
-      if (req.method === 'DELETE') {
-        this.destinations.delete(dest.id);
-        return send(200, { success: true });
+      if (req.method === 'POST' && url.pathname === '/publish') return send(202, this.publish(body as PublishRequest));
+    } catch (error) {
+      if (error instanceof McpError) {
+        return send(422, { mcp_error: { code: error.code, message: error.message, ...(error.data && { data: error.data }) } });
       }
-      if (req.method === 'PUT' && parts[4] === 'enable') {
-        dest.disabled_at = null;
-        return send(200, dest);
-      }
-      if (req.method === 'GET' && parts[4] === 'attempts') {
-        const last = this.deliveries.filter((d) => d.destinationId === dest.id).at(-1);
-        const models = last
-          ? [{ id: `atm_${last.attempt}`, status: last.status < 300 ? 'success' : 'failed', time: new Date().toISOString(), code: String(last.status) }]
-          : [];
-        return send(200, { models, pagination: {} });
-      }
-    }
-
-    if (req.method === 'POST' && url.pathname === '/publish') {
-      const event = body as PublishRequest;
-      if (!event.tenant_id) return send(422, { message: 'tenant_id is required' });
-      if (this.seenEventIds.has(event.id)) return send(202, { id: event.id, duplicate: true, destination_ids: [] });
-      this.seenEventIds.add(event.id);
-      this.published.push(event);
-      const outpostEvent = { id: event.id, topic: event.topic, time: event.time, metadata: event.metadata ?? {}, data: event.data };
-      const matched = [...this.destinations.values()].filter(
-        (d) =>
-          d.tenant_id === event.tenant_id &&
-          !d.disabled_at &&
-          (d.topics === '*' || d.topics.includes(event.topic)) &&
-          (!d.filter || Object.keys(d.filter).length === 0 || matchesFilter(outpostEvent, d.filter)),
-      );
-      send(202, { id: event.id, duplicate: false, destination_ids: matched.map((d) => d.id) });
-      for (const dest of matched) void this.deliver(event, dest);
-      return;
+      throw error;
     }
     send(404, { message: 'not found' });
   }
 
-  private async deliver(event: PublishRequest, dest: OutpostDestination) {
-    const body = JSON.stringify(event.data);
+  private key(tenantId: string, name: string, args: Record<string, unknown>, url: string) {
+    return `sub_${createHash('sha256').update(JSON.stringify([tenantId, name, sortedJson(args), url])).digest('hex').slice(0, 32)}`;
+  }
+
+  private parseKey(tenantId: string, params: Record<string, unknown>) {
+    const delivery = (params.delivery ?? {}) as Record<string, unknown>;
+    const args = (params.arguments ?? {}) as Record<string, unknown>;
+    const definition = definitions.events.find((event) => event.name === params.name);
+    if (!definition) throw new McpError(-32023, 'NotFound', { kind: 'event' });
+    const properties = definition.inputSchema?.properties ?? {};
+    for (const [name, value] of Object.entries(args)) {
+      const type = properties[name]?.type;
+      if (!type || (type === 'integer' ? !Number.isInteger(value) : typeof value !== type)) throw new McpError(-32602, 'InvalidParams');
+    }
+    let callback: URL;
+    try {
+      callback = new URL(String(delivery.url));
+    } catch {
+      throw new McpError(-32602, 'InvalidParams');
+    }
+    if (!/^https?:$/.test(callback.protocol)) throw new McpError(-32602, 'InvalidParams');
+    return { name: definition.name, args, url: callback.href, delivery, id: this.key(tenantId, definition.name, args, callback.href) };
+  }
+
+  private async subscribe(tenantId: string, params: Record<string, unknown>) {
+    const delivery = (params.delivery ?? {}) as Record<string, unknown>;
+    if (delivery.mode !== 'webhook') throw new McpError(-32026, 'Unsupported', { feature: 'deliveryMode', value: delivery.mode });
+    const { name, args, url, id } = this.parseKey(tenantId, params);
+    const secret = String(delivery.secret ?? '');
+    if (!isValidWebhookSecret(secret)) throw new McpError(-32602, 'InvalidParams');
+
+    const verifiedKey = JSON.stringify([tenantId, url]);
+    if (!this.verified.has(verifiedKey)) {
+      await this.verify(url, secret, id);
+      this.verified.add(verifiedKey);
+    }
+
+    this.tenants.add(tenantId);
+    const ttl = params.ttlMs;
+    const expiresAt = ttl === null ? null : Date.now() + (typeof ttl === 'number' ? ttl : DAY_MS);
+    const existing = this.subscriptions.get(id);
+    const previousSecret =
+      existing && existing.secret !== secret ? { secret: existing.secret, until: Date.now() + DAY_MS } : existing?.previousSecret;
+    this.subscriptions.set(id, { id, tenantId, name, arguments: args, url, secret, previousSecret, expiresAt });
+    return {
+      resultType: 'complete',
+      id,
+      refreshBefore: expiresAt === null ? null : new Date(expiresAt).toISOString(),
+      cursor: null,
+      truncated: false,
+    };
+  }
+
+  private async verify(url: string, secret: string, subscriptionId: string) {
+    const challenge = randomBytes(24).toString('base64url');
+    const msgId = `msg_verification_${randomBytes(12).toString('hex')}`;
+    const body = JSON.stringify({ type: 'verification', challenge });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': 'application/json', 'X-MCP-Subscription-Id': subscriptionId, ...signStandardWebhook([secret], msgId, body) },
+        body,
+      });
+    } catch {
+      throw new McpError(-32027, 'CallbackEndpointError', { reason: 'connection_refused' });
+    }
+    this.verifications.push(msgId);
+    if (response.status >= 500) throw new McpError(-32027, 'CallbackEndpointError', { reason: 'http_5xx' });
+    if (response.status >= 300) throw new McpError(-32027, 'CallbackEndpointError', { reason: 'http_4xx' });
+    const echoed = ((await response.json().catch(() => ({}))) as { challenge?: unknown }).challenge;
+    const ok =
+      typeof echoed === 'string' && echoed.length === challenge.length && timingSafeEqual(Buffer.from(echoed), Buffer.from(challenge));
+    if (!ok) throw new McpError(-32027, 'CallbackEndpointError', { reason: 'challenge_failed' });
+  }
+
+  private unsubscribe(tenantId: string, params: Record<string, unknown>) {
+    const { id } = this.parseKey(tenantId, params);
+    const sub = this.subscriptions.get(id);
+    if (!sub || sub.tenantId !== tenantId) throw new McpError(-32023, 'NotFound', { kind: 'subscription' });
+    this.subscriptions.delete(id);
+    return { resultType: 'complete' };
+  }
+
+  private publish(event: PublishRequest) {
+    if (!event.tenant_id) throw new Error('tenant_id is required');
+    if (this.seenEventIds.has(event.id)) return { id: event.id, duplicate: true, destination_ids: [] };
+    this.seenEventIds.add(event.id);
+    this.published.push(event);
+    const now = Date.now();
+    const matched = [...this.subscriptions.values()].filter(
+      (sub) =>
+        sub.tenantId === event.tenant_id &&
+        sub.name === event.topic &&
+        (sub.expiresAt === null || sub.expiresAt > now) &&
+        Object.entries(sub.arguments).every(([field, value]) => event.data[field] === value),
+    );
+    for (const sub of matched) void this.deliver(event, sub);
+    return { id: event.id, duplicate: false, destination_ids: matched.map((sub) => sub.id) };
+  }
+
+  private async deliver(event: PublishRequest, sub: MockSubscription) {
+    const envelope = { eventId: event.id, name: event.topic, timestamp: event.time ?? new Date().toISOString(), data: event.data, cursor: null };
+    const body = JSON.stringify(envelope);
+    const msgId = `msg_${randomBytes(16).toString('base64url')}`;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
-      const secrets = [dest.credentials.secret!];
-      const { previous_secret, previous_secret_invalid_at } = dest.credentials;
-      if (previous_secret && previous_secret_invalid_at && Date.parse(previous_secret_invalid_at) > Date.now()) secrets.push(previous_secret);
-      const headers: Record<string, string> = {
-        'content-type': 'application/json',
-        ...JSON.parse(dest.config.custom_headers ?? '{}'),
-        ...signStandardWebhook(secrets, event.id, body),
-        'webhook-topic': event.topic,
-      };
-      let status = 0;
-      try {
-        const response = await fetch(dest.config.url, { method: 'POST', headers, body, redirect: 'manual' });
-        status = response.status;
-      } catch {
-        status = 0;
-      }
-      this.deliveries.push({ eventId: event.id, destinationId: dest.id, status, attempt, headers, body });
-      if (status >= 200 && status < 300) return;
+      const status = await this.post(sub, msgId, body, event.id, attempt);
+      if ((status >= 200 && status < 300) || status === 410 || status === 413) return;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+  }
+
+  private async post(sub: MockSubscription, msgId: string, body: string, eventId: string, attempt = 1): Promise<number> {
+    const secrets = [sub.secret];
+    if (sub.previousSecret && sub.previousSecret.until > Date.now()) secrets.push(sub.previousSecret.secret);
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'X-MCP-Subscription-Id': sub.id,
+      ...signStandardWebhook(secrets, msgId, body),
+    };
+    let status = 0;
+    try {
+      status = (await fetch(sub.url, { method: 'POST', headers, body, redirect: 'manual' })).status;
+    } catch {
+      status = 0;
+    }
+    this.deliveries.push({ eventId, subscriptionId: sub.id, status, attempt, headers, body });
+    return status;
   }
 }

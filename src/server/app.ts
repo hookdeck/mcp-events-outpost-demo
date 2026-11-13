@@ -5,8 +5,9 @@ import type { ServerConfig } from './config.js';
 import { DemoStore, type PlaceOrderInput } from './demo-store.js';
 import { buildMcpServer } from './mcp.js';
 import { Outpost } from '@hookdeck/outpost-sdk';
-import { SubscriptionStore } from './store.js';
-import { SubscriptionService, type SubscriptionServiceDeps } from './subscriptions.js';
+import { OutpostMcp } from './outpost-mcp.js';
+import { TenantRegistry } from './store.js';
+import { SubscriptionService } from './subscriptions.js';
 
 export interface App {
   server: http.Server;
@@ -21,14 +22,48 @@ function mcpMethod(req: http.IncomingMessage): string {
   return String(req.headers['mcp-method'] ?? '-');
 }
 
-export function createApp(
-  config: ServerConfig,
-  overrides: Partial<Pick<SubscriptionServiceDeps, 'verify' | 'now'>> & { log?: (message: string) => void } = {},
-): App {
-  const log = overrides.log ?? ((message: string) => console.log(`[server] ${message}`));
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
+
+/** Reads a JSON request body, or returns undefined when it isn't valid JSON or is too large. */
+async function readJson(req: http.IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_MCP_BODY_BYTES) return undefined;
+    chunks.push(chunk as Buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+const rpcError = (id: unknown, code: number, message: string) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+
+/**
+ * SEP-3415 routes events/subscribe and events/unsubscribe by the Mcp-Name
+ * header, which must equal params.name. The MCP SDK doesn't check it for these
+ * methods (and its client doesn't send it), so check it here: a header that
+ * disagrees with the body is refused with HeaderMismatch. A missing header is
+ * accepted, for clients that don't send it yet.
+ */
+function nameHeaderMismatch(req: http.IncomingMessage, body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const { id, method, params } = body as { id?: unknown; method?: unknown; params?: { name?: unknown } };
+  if (method !== 'events/subscribe' && method !== 'events/unsubscribe') return undefined;
+  const header = req.headers['mcp-name'];
+  if (header === undefined || header === params?.name) return undefined;
+  return rpcError(id, -32020, 'HeaderMismatch');
+}
+
+export function createApp(config: ServerConfig, options: { log?: (message: string) => void } = {}): App {
+  const log = options.log ?? ((message: string) => console.log(`[server] ${message}`));
   const outpost = new Outpost({ apiKey: config.outpost.apiKey, serverURL: config.outpost.baseUrl });
-  const store = new SubscriptionStore(config.storeFile);
-  const subscriptions = new SubscriptionService({ config, store, outpost, log, ...overrides });
+  const outpostMcp = new OutpostMcp(config.outpost.baseUrl, config.outpost.apiKey, log);
+  const tenants = new TenantRegistry(config.tenantsFile);
+  const subscriptions = new SubscriptionService({ config, outpost: outpostMcp, tenants, log });
   const demoStore = new DemoStore(outpost, subscriptions, log);
 
   const mcp = toNodeHandler(
@@ -52,7 +87,12 @@ export function createApp(
           return json(res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
         }
         (req as http.IncomingMessage & { auth?: unknown }).auth = { token: token ?? '', clientId: principal, scopes: [] };
-        return await mcp(req, res);
+        if (req.method !== 'POST') return await mcp(req, res);
+        const body = await readJson(req);
+        if (body === undefined) return json(res, 400, rpcError(null, -32700, 'Parse error'));
+        const mismatch = nameHeaderMismatch(req, body);
+        if (mismatch) return json(res, 400, mismatch);
+        return await mcp(req, res, body);
       }
 
       if (pathname === '/demo/orders' && req.method === 'POST') {
@@ -70,9 +110,6 @@ export function createApp(
     }
   });
 
-  const sweeper = setInterval(() => void subscriptions.sweep(), config.sweepIntervalMs);
-  sweeper.unref();
-
   return {
     server,
     subscriptions,
@@ -81,7 +118,6 @@ export function createApp(
       new Promise((resolve) => server.listen(port, () => resolve((server.address() as { port: number }).port))),
     close: () =>
       new Promise((resolve) => {
-        clearInterval(sweeper);
         server.closeAllConnections();
         server.close(() => resolve());
       }),

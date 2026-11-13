@@ -10,10 +10,9 @@ import { generateWebhookSecret } from '../src/shared/secret.js';
 import { MockOutpost } from './mock-outpost.js';
 
 /*
- * Whole flow, offline: MCP server + test subscriber + a mock Outpost that
- * signs and delivers like Outpost's Standard Webhooks mode.
- * subscribe -> challenge -> publish -> signed delivery -> verify -> refresh
- * (with secret rotation) -> unsubscribe, plus the failure paths.
+ * Whole flow, offline: MCP server + test subscriber + a mock Outpost with MCP
+ * Events on. subscribe -> Outpost's challenge -> publish -> signed delivery ->
+ * verify -> refresh (with secret rotation) -> unsubscribe, plus failure paths.
  */
 
 const waitFor = async (check: () => boolean, timeoutMs = 3000) => {
@@ -25,6 +24,7 @@ const waitFor = async (check: () => boolean, timeoutMs = 3000) => {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const anyResult = z.record(z.string(), z.unknown());
+const HOUR_MS = 60 * 60 * 1000;
 
 let outpost: MockOutpost;
 let app: App;
@@ -34,27 +34,25 @@ const config = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   port: 0,
   tokens: new Map([['tok-alice', 'alice'], ['tok-bob', 'bob']]),
   outpost: { baseUrl: outpost.baseUrl, apiKey: outpost.apiKey },
-  allowLocalCallbacks: true,
-  defaultTtlMs: 60 * 60 * 1000,
-  maxTtlMs: 60 * 60 * 1000,
-  minTtlMs: 0,
-  sweepIntervalMs: 60 * 60 * 1000,
-  verificationCacheTtlMs: 60 * 60 * 1000,
-  verificationTimeoutMs: 1000,
-  secretRotationGraceMs: 10 * 60 * 1000,
-  storeFile: null,
+  defaultTtlMs: HOUR_MS,
+  maxTtlMs: 2 * HOUR_MS,
+  minTtlMs: 60 * 1000,
+  tenantsFile: null,
   tenantPrefix: 'mcp_',
   ...overrides,
 });
 
 const placeOrder = async (order: Record<string, unknown>) => {
   const response = await fetch(`${storeUrl}/demo/orders`, { method: 'POST', body: JSON.stringify(order) });
-  return (await response.json()) as { order: { orderId: string }; published: Array<{ tenantId: string; id: string; destinationIds: string[] }> };
+  return (await response.json()) as {
+    order: { orderId: string; highValue: boolean };
+    published: Array<{ tenantId: string; id: string; destinationIds: string[] }>;
+  };
 };
 
-async function rawClient(token: string) {
+async function rawClient(token: string, url = serverUrl) {
   const client = new Client({ name: 'raw', version: '1' }, { versionNegotiation: { mode: 'auto' } });
-  await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
   return client;
 }
 
@@ -72,7 +70,7 @@ afterAll(async () => {
   await outpost.stop();
 });
 
-describe('MCP Events over Outpost, end to end', () => {
+describe('MCP Events with Outpost, end to end', () => {
   it('runs subscribe -> verify -> publish -> deliver -> refresh/rotate -> unsubscribe', async () => {
     const received: Array<{ event: McpEvent; headers: http.IncomingHttpHeaders }> = [];
     const logs: string[] = [];
@@ -80,55 +78,47 @@ describe('MCP Events over Outpost, end to end', () => {
       serverUrl,
       token: 'tok-alice',
       eventName: 'order.created',
-      arguments: { minTotal: 100, currency: 'USD' },
+      arguments: { currency: 'USD', highValue: true },
       onEvent: (event, headers) => received.push({ event, headers }),
       debug: true,
       log: (message) => logs.push(message),
     });
 
-    // Subscribe: the server verifies the callback before activating it.
+    // Subscribe: Outpost verifies the callback before it stores the subscription.
     const sub = await subscriber.start();
     expect(subscriber.client.getNegotiatedProtocolVersion?.()).toBe('2026-07-28');
-    expect(sub.id).toMatch(/^sub_[0-9a-f]{32}$/);
+    expect(sub.id).toMatch(/^sub_/);
     expect(sub.cursor).toBeNull();
     expect(sub.truncated).toBe(false);
-    expect(Date.parse(sub.refreshBefore!)).toBeGreaterThan(Date.now());
     expect(subscriber.verificationsAnswered).toHaveLength(1);
     expect(subscriber.verificationsAnswered[0]).toMatch(/^msg_verification_/);
 
-    // Outpost now has one tenant per principal and one destination per subscription.
-    expect(outpost.tenants.has('mcp_alice')).toBe(true);
-    const destination = outpost.destinations.get(sub.id)!;
-    expect(destination).toMatchObject({
-      type: 'webhook',
-      topics: ['order.created'],
-      filter: { data: { data: { total: { $gte: 100 }, currency: 'USD' } } },
-      config: { url: subscriber.callbackUrl },
-      credentials: { secret: subscriber.currentSecret },
-    });
-    expect(JSON.parse(destination.config.custom_headers!)).toEqual({ 'X-MCP-Subscription-Id': sub.id });
+    // The subscription lives in Outpost, in the principal's tenant, with the server's default lifetime.
+    const stored = outpost.subscriptions.get(sub.id)!;
+    expect(stored).toMatchObject({ tenantId: 'mcp_alice', name: 'order.created', arguments: { currency: 'USD', highValue: true } });
+    expect(Math.abs(Date.parse(sub.refreshBefore!) - (Date.now() + HOUR_MS))).toBeLessThan(5000);
 
-    // A matching order is published and delivered, signed, with MCP's body shape.
+    // A matching order is delivered as the MCP event envelope, signed by Outpost.
     const { order, published } = await placeOrder({ total: 150, currency: 'USD', customerName: 'Ada' });
+    expect(order.highValue).toBe(true);
     expect(published).toEqual([expect.objectContaining({ tenantId: 'mcp_alice', destinationIds: [sub.id] })]);
     await waitFor(() => received.length === 1);
-    const [{ event, headers }] = received as [typeof received[0]];
-    expect(event).toMatchObject({ name: 'order.created', cursor: null, data: { orderId: order.orderId, total: 150, currency: 'USD' } });
+    const [{ event, headers }] = received as [(typeof received)[0]];
+    expect(event).toMatchObject({ name: 'order.created', cursor: null, data: { orderId: order.orderId, total: 150, currency: 'USD', highValue: true } });
     expect(event.eventId).toBe(published[0]!.id);
-    expect(headers['webhook-id']).toBe(event.eventId);
+    // webhook-id identifies the delivery, not the event.
+    expect(String(headers['webhook-id'])).toMatch(/^msg_/);
+    expect(headers['webhook-id']).not.toBe(event.eventId);
     expect(headers['x-mcp-subscription-id']).toBe(sub.id);
-    expect(new Date(event.timestamp).toISOString()).toBe(event.timestamp);
 
-    // A non-matching order is filtered out by Outpost.
-    const small = await placeOrder({ total: 50, currency: 'USD' });
-    const euro = await placeOrder({ total: 500, currency: 'EUR' });
-    expect(small.published[0]!.destinationIds).toEqual([]);
-    expect(euro.published[0]!.destinationIds).toEqual([]);
+    // Orders that don't match the arguments are filtered out by Outpost.
+    expect((await placeOrder({ total: 50, currency: 'USD' })).published[0]!.destinationIds).toEqual([]);
+    expect((await placeOrder({ total: 500, currency: 'EUR' })).published[0]!.destinationIds).toEqual([]);
     await sleep(100);
     expect(received).toHaveLength(1);
 
-    // Duplicate delivery (same webhook-id) is acknowledged but not processed twice.
-    await outpost.redeliver(event.eventId, sub.id);
+    // A retried delivery (same webhook-id) is acknowledged but not processed twice.
+    await outpost.redeliver(outpost.deliveries.find((d) => d.eventId === event.eventId)!);
     await sleep(50);
     expect(received).toHaveLength(1);
     expect(outpost.deliveries.at(-1)!.status).toBe(200);
@@ -137,7 +127,7 @@ describe('MCP Events over Outpost, end to end', () => {
     const forgedBody = JSON.stringify({ ...event, eventId: 'evt_forged' });
     const forged = await fetch(subscriber.callbackUrl!, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'X-MCP-Subscription-Id': sub.id, ...signStandardWebhook([generateWebhookSecret()], 'evt_forged', forgedBody) },
+      headers: { 'content-type': 'application/json', 'X-MCP-Subscription-Id': sub.id, ...signStandardWebhook([generateWebhookSecret()], 'msg_forged', forgedBody) },
       body: forgedBody,
     });
     expect(forged.status).toBe(401);
@@ -147,39 +137,70 @@ describe('MCP Events over Outpost, end to end', () => {
       headers: {
         'content-type': 'application/json',
         'X-MCP-Subscription-Id': sub.id,
-        ...signStandardWebhook([subscriber.currentSecret], 'evt_stale', staleBody, new Date(Date.now() - 10 * 60 * 1000)),
+        ...signStandardWebhook([subscriber.currentSecret], 'msg_stale', staleBody, new Date(Date.now() - 10 * 60 * 1000)),
       },
       body: staleBody,
     });
     expect(stale.status).toBe(401);
     expect(received).toHaveLength(1);
 
-    // Refresh with secret rotation: same id, no new challenge, Outpost dual-signs.
-    const oldSecret = subscriber.currentSecret;
+    // Refresh with secret rotation: same id, no new challenge, Outpost signs with both secrets.
     const refreshed = await subscriber.refresh({ rotateSecret: true });
     expect(refreshed.id).toBe(sub.id);
-    expect(refreshed.deliveryStatus).toMatchObject({ active: true, lastError: null });
     expect(subscriber.verificationsAnswered).toHaveLength(1);
-    expect(outpost.destinations.get(sub.id)!.credentials).toMatchObject({ secret: subscriber.currentSecret, previous_secret: oldSecret });
     await placeOrder({ total: 200, currency: 'USD' });
     await waitFor(() => received.length === 2);
     expect(String(received[1]!.headers['webhook-signature']).split(' ')).toHaveLength(2);
-    // --debug shows which secret produced each entry; a verifier alone would pass with just the new one.
-    expect(logs.some((line) => line.startsWith(`debug ${received[1]!.event.eventId}: 2 signature(s): #1 current, #2 previous; timestamp age `))).toBe(true);
+    expect(logs.some((line) => line.startsWith(`debug ${received[1]!.headers['webhook-id']}: 2 signature(s): #1 current, #2 previous; timestamp age `))).toBe(true);
 
-    // Unsubscribe removes the destination; later orders are not published to this tenant.
+    // Unsubscribe removes the subscription in Outpost; later orders match nothing.
     await subscriber.stop();
-    expect(outpost.destinations.has(sub.id)).toBe(false);
-    expect((await placeOrder({ total: 999, currency: 'USD' })).published).toEqual([]);
+    expect(outpost.subscriptions.has(sub.id)).toBe(false);
+    expect((await placeOrder({ total: 999, currency: 'USD' })).published).toEqual([
+      expect.objectContaining({ tenantId: 'mcp_alice', destinationIds: [] }),
+    ]);
   });
 
-  it('declares the events capability over server/discover and lists order.created', async () => {
+  it('declares the events capability over server/discover and lists the events Outpost serves', async () => {
     const client = await rawClient('tok-bob');
     const discover = await client.request({ method: 'server/discover', params: {} }, anyResult);
-    expect(discover).toMatchObject({ supportedVersions: expect.arrayContaining(['2026-07-28']), capabilities: { events: {} } });
+    expect(discover).toMatchObject({
+      supportedVersions: expect.arrayContaining(['2026-07-28']),
+      capabilities: { events: {}, extensions: { 'io.modelcontextprotocol/events': {} } },
+    });
     const list = await client.request({ method: 'events/list', params: {} } as never, anyResult);
     expect(list.events).toEqual([expect.objectContaining({ name: 'order.created', delivery: ['webhook'] })]);
     await client.close();
+  });
+
+  it('refuses an Mcp-Name header that disagrees with params.name, and accepts a missing one', async () => {
+    const post = (headers: Record<string, string>) =>
+      fetch(serverUrl, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer tok-bob', 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'events/unsubscribe', params: { name: 'order.created', delivery: { url: 'https://example.com/x' } } }),
+      });
+    const mismatch = await post({ 'mcp-name': 'order.updated' });
+    expect(mismatch.status).toBe(400);
+    expect(await mismatch.json()).toMatchObject({ id: 7, error: { code: -32020, message: 'HeaderMismatch' } });
+    const client = await rawClient('tok-bob'); // the SDK client sends no Mcp-Name for events/*
+    await expect(
+      client.request({ method: 'events/unsubscribe', params: { name: 'order.created', delivery: { url: 'https://example.com/x' } } } as never, anyResult),
+    ).resolves.toBeDefined();
+    await client.close();
+  });
+
+  it('reports MCP Events as unavailable when Outpost has it off or its definitions are invalid', async () => {
+    const client = await rawClient('tok-bob');
+    try {
+      for (const status of [404, 503]) {
+        outpost.listStatus = status;
+        await expect(client.request({ method: 'events/list', params: {} } as never, anyResult)).rejects.toMatchObject({ code: -32603 });
+      }
+    } finally {
+      outpost.listStatus = 200;
+      await client.close();
+    }
   });
 
   it('rejects unauthenticated MCP requests', async () => {
@@ -207,8 +228,7 @@ describe('MCP Events over Outpost, end to end', () => {
       log: () => {},
     });
     const sub = await subscriber.start();
-    expect(subscriber.callbackUrl).toBe(`http://localhost:${port}/forwarded/by/gateway`);
-    expect(outpost.destinations.get(sub.id)!.credentials.secret).toBe(secret);
+    expect(outpost.subscriptions.get(sub.id)!.secret).toBe(secret);
     await placeOrder({ total: 42, currency: 'USD' });
     await waitFor(() => received.length === 1);
     await subscriber.stop();
@@ -224,117 +244,95 @@ describe('MCP Events over Outpost, end to end', () => {
     const anonApp = createApp(config({ anonymousPrincipal: 'anon' }), { log: (message) => logs.push(message) });
     const port = await anonApp.listen(0);
     try {
-      const client = noToken();
-      await client.connect(new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`)));
       const subscriber = new Subscriber({ serverUrl: `http://localhost:${port}/mcp`, token: '', eventName: 'order.created', log: () => {} });
       const sub = await subscriber.start();
-      expect(sub.id).toMatch(/^sub_/);
-      expect(logs.some((line) => line.startsWith('verified callback for anon '))).toBe(true);
-      // The subscribe log shows the request but never the secret.
-      const subscribeLog = logs.find((line) => line.startsWith('events/subscribe from anon: '))!;
-      expect(subscribeLog).toContain('<whsec_ (32 bytes)>');
-      expect(subscribeLog).not.toContain(subscriber.currentSecret);
+      expect(outpost.subscriptions.get(sub.id)!.tenantId).toBe('mcp_anon');
+      expect(logs.some((line) => line.startsWith(`subscribed ${sub.id} for mcp_anon `))).toBe(true);
+      expect(logs.join('\n')).not.toContain(subscriber.currentSecret);
       await subscriber.stop();
-      await client.close();
     } finally {
       await anonApp.close();
     }
   });
 
-  it('returns the sketch error codes for bad subscribe requests', async () => {
+  it("returns Outpost's MCP Events errors for bad subscribe requests", async () => {
     const client = await rawClient('tok-bob');
     const subscribe = (params: Record<string, unknown>) => client.request({ method: 'events/subscribe', params } as never, anyResult);
     const delivery = { mode: 'webhook', url: 'http://localhost:9/hook', secret: generateWebhookSecret() };
 
     await expect(subscribe({ name: 'order.created', delivery: { ...delivery, secret: 'whsec_dG9vc2hvcnQ=' } })).rejects.toMatchObject({ code: -32602 });
-    await expect(subscribe({ name: 'order.created', arguments: { minTotal: -5 }, delivery })).rejects.toMatchObject({ code: -32602 });
-    await expect(subscribe({ name: 'order.created', delivery: { ...delivery, url: 'ftp://x' } })).rejects.toMatchObject({ code: -32602 });
-    await expect(subscribe({ name: 'nope', delivery })).rejects.toMatchObject({ code: -32011, data: { kind: 'event' } });
+    await expect(subscribe({ name: 'order.created', arguments: { total: 5 }, delivery })).rejects.toMatchObject({ code: -32602 });
+    await expect(subscribe({ name: 'order.created', arguments: { highValue: 'yes' }, delivery })).rejects.toMatchObject({ code: -32602 });
+    await expect(subscribe({ name: 'nope', delivery })).rejects.toMatchObject({ code: -32023, data: { kind: 'event' } });
     await expect(subscribe({ name: 'order.created', delivery: { ...delivery, mode: 'push' } })).rejects.toMatchObject({
-      code: -32014,
+      code: -32026,
       data: { feature: 'deliveryMode', value: 'push' },
     });
-    // Nothing listening on port 9: verification can't connect.
-    await expect(subscribe({ name: 'order.created', delivery })).rejects.toMatchObject({ code: -32015, data: { reason: 'connection_refused' } });
+    await expect(subscribe({ name: 'order.created', delivery, ttlMs: 'soon' })).rejects.toMatchObject({ code: -32602 });
+    // Nothing listening on port 9: Outpost's verification can't connect.
+    await expect(subscribe({ name: 'order.created', delivery })).rejects.toMatchObject({ code: -32027, data: { reason: 'connection_refused' } });
     await client.close();
   });
 
-  it('fails with challenge_failed when the endpoint does not echo the challenge, and creates nothing', async () => {
+  it('fails with challenge_failed when the endpoint does not echo the challenge, and stores nothing', async () => {
     const liar = http.createServer((_req, res) => res.writeHead(200).end('{"challenge":"wrong"}'));
     await new Promise<void>((r) => liar.listen(0, r));
     const url = `http://localhost:${(liar.address() as { port: number }).port}/hook`;
     const client = await rawClient('tok-bob');
-    const before = outpost.destinations.size;
+    const before = outpost.subscriptions.size;
     await expect(
       client.request({ method: 'events/subscribe', params: { name: 'order.created', delivery: { mode: 'webhook', url, secret: generateWebhookSecret() } } } as never, anyResult),
-    ).rejects.toMatchObject({ code: -32015, data: { reason: 'challenge_failed' } });
-    expect(outpost.destinations.size).toBe(before);
+    ).rejects.toMatchObject({ code: -32027, data: { reason: 'challenge_failed' } });
+    expect(outpost.subscriptions.size).toBe(before);
     await client.close();
     liar.close();
   });
 
-  it('is idempotent: same key -> same id, and unsubscribe of an unknown key returns {}', async () => {
+  it('is idempotent: same key -> same id, and unsubscribe of an unknown key succeeds', async () => {
     const subscriber = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
     const first = await subscriber.start();
     const again = await subscriber.subscribe();
     expect(again.id).toBe(first.id);
-    expect([...outpost.destinations.values()].filter((d) => d.config.url === subscriber.callbackUrl)).toHaveLength(1);
+    expect([...outpost.subscriptions.values()].filter((s) => s.url === subscriber.callbackUrl)).toHaveLength(1);
 
-    const client = await rawClient('tok-alice'); // a different principal can't touch bob's subscription
+    // A different principal is a different tenant, so it can't remove bob's subscription.
+    const client = await rawClient('tok-alice');
     const result = await client.request(
       { method: 'events/unsubscribe', params: { name: 'order.created', arguments: {}, delivery: { url: subscriber.callbackUrl } } } as never,
       anyResult,
     );
-    expect(result).not.toHaveProperty('error');
-    expect(outpost.destinations.has(first.id)).toBe(true);
+    expect(result).not.toHaveProperty('error'); // resolved, not a NotFound error
+    expect(outpost.subscriptions.has(first.id)).toBe(true);
     await client.close();
     await subscriber.stop();
-    expect(outpost.destinations.has(first.id)).toBe(false);
+    expect(outpost.subscriptions.has(first.id)).toBe(false);
   });
 
-  it('refreshes an existing destination when the server has lost its store, instead of duplicating it', async () => {
-    const original = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
-    const sub = await original.start();
-
-    // A second server with an empty store, against the same Outpost: create hits "destination already exists".
-    const fresh = createApp(config(), { log: () => {} });
-    const freshUrl = `http://localhost:${await fresh.listen(0)}/mcp`;
-    const again = new Subscriber({
-      serverUrl: freshUrl,
-      token: 'tok-bob',
-      eventName: 'order.created',
-      callbackUrl: original.callbackUrl,
-      secret: original.currentSecret,
-      log: () => {},
-    });
-    const resubscribed = await again.start();
-    expect(resubscribed.id).toBe(sub.id);
-    expect([...outpost.destinations.values()].filter((d) => d.config.url === original.callbackUrl)).toHaveLength(1);
-
-    await again.stop({ unsubscribe: false });
-    await fresh.close();
-    await original.stop();
-  });
-
-  it('returns ResourceExhausted when the tenant is at its Outpost destination limit', async () => {
-    const subscriber = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
-    outpost.maxDestinationsPerTenant = 0;
-    try {
-      await expect(subscriber.start()).rejects.toMatchObject({ code: -32013 });
-    } finally {
-      outpost.maxDestinationsPerTenant = 20;
-      await subscriber.stop({ unsubscribe: false });
-    }
-  });
-
-  it('sweeps expired subscriptions from Outpost', async () => {
-    const subscriber = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', ttlMs: 1, log: () => {} });
-    const sub = await subscriber.start();
-    expect(outpost.destinations.has(sub.id)).toBe(true);
-    await sleep(5);
-    expect(app.subscriptions.liveTenants()).not.toContain('mcp_bob');
-    expect(await app.subscriptions.sweep()).toContain(sub.id);
-    expect(outpost.destinations.has(sub.id)).toBe(false);
-    await subscriber.stop({ unsubscribe: false });
+  it('applies the server lifetime policy to ttlMs before forwarding it', async () => {
+    const lifetime = async (ttlMs: number | null | undefined) => {
+      const subscriber = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
+      // Subscriber omits ttlMs when undefined; send null and numbers through a raw request.
+      await subscriber.start();
+      const client = await rawClient('tok-bob');
+      const result = (await client.request(
+        {
+          method: 'events/subscribe',
+          params: {
+            name: 'order.created',
+            delivery: { mode: 'webhook', url: subscriber.callbackUrl, secret: subscriber.currentSecret },
+            ...(ttlMs !== undefined && { ttlMs }),
+          },
+        } as never,
+        anyResult,
+      )) as { refreshBefore: string };
+      await client.close();
+      await subscriber.stop();
+      return Date.parse(result.refreshBefore) - Date.now();
+    };
+    const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThan(5000);
+    near(await lifetime(undefined), HOUR_MS); // default
+    near(await lifetime(1000), 60 * 1000); // raised to the minimum
+    near(await lifetime(10 * HOUR_MS), 2 * HOUR_MS); // capped at the maximum
+    near(await lifetime(null), 2 * HOUR_MS); // no expiry isn't granted
   });
 });
