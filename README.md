@@ -8,7 +8,7 @@ Since v1.9.0, Outpost has [MCP Events support](https://hookdeck.com/docs/outpost
 
 For a step-by-step walkthrough, read the guide [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost).
 
-**Status:** demo code, not production-ready. Tested end to end on 2026-11-13 against a self-hosted Outpost v1.9.0, and with Outpost's MCP Events conformance check (`mcp-dev check`: 38 pass, 2 deliberate failures, see [Tests](#against-a-real-outpost)). Not yet re-tested with ChatGPT (see [ChatGPT and `webhook-id`](#chatgpt-and-webhook-id)) or against managed Outpost, where the MCP Events settings are rolling out. See [What's demo-only](#whats-demo-only).
+**Status:** demo code, not production-ready. Tested end to end on 2026-11-13 against a self-hosted Outpost v1.9.0, and with Outpost's MCP Events conformance check (`mcp-dev check`: 38 pass, 2 deliberate failures, see [Tests](#against-a-real-outpost)). Tested with ChatGPT as the subscriber the same day (see [Try it with ChatGPT](#try-it-with-chatgpt)). The Vercel AI SDK rejects Outpost's deliveries (see [`webhook-id` and other subscribers](#webhook-id-and-other-subscribers)). Not yet tested against managed Outpost, where the MCP Events settings are rolling out. See [What's demo-only](#whats-demo-only).
 
 The first version of this demo ran the verification challenge, expiry and filtering in the MCP server, on top of plain Outpost webhook destinations. It works with any Outpost version and was tested with ChatGPT and managed Outpost in October 2026. It's kept at the [`diy-webhook-destinations`](https://github.com/hookdeck/mcp-events-outpost-demo/tree/diy-webhook-destinations) tag.
 
@@ -178,17 +178,44 @@ Outpost's publish API takes exactly one `tenant_id`, and each principal is its o
 
 The server keeps the list of tenants that have subscribed in `data/tenants.json`. A tenant whose subscriptions have ended stays listed, and publishing to it matches nothing. Outpost's `GET /tenants` could replace the file, since a tenant's `topics` include the events it has subscriptions to, but on self-hosted Outpost it needs Redis with RediSearch.
 
-## ChatGPT and `webhook-id`
+## `webhook-id` and other subscribers
 
-Outpost sets `webhook-id` to a random `msg_...` value per delivery (one event on one subscription), kept across retries, as SEP-3415 requires. OpenAI's implementer guide says `webhook-id` must equal the body's `eventId`, and clients built on earlier drafts may check that. So ChatGPT might not accept Outpost's deliveries yet. This version of the demo hasn't been tested with ChatGPT; the October test used the first version, where `webhook-id` equaled `eventId`.
+Outpost sets `webhook-id` to a random `msg_...` value per delivery (one event on one subscription), kept across retries, as SEP-3415 requires. OpenAI's implementer guide says `webhook-id` must equal the body's `eventId`, and subscribers built on earlier drafts may check that. Tested on 2026-11-13 with Outpost v1.9.0:
+
+| Subscriber | Result |
+|---|---|
+| ChatGPT | Accepts the deliveries (`200`) and runs the task. See [Try it with ChatGPT](#try-it-with-chatgpt). |
+| Vercel AI SDK (`@ai-sdk/mcp` 2.0.99, `experimental_createMCPEventWebhook`) | Passes the verification challenge, then answers `400` to every event, because it requires `eventId` to equal `webhook-id`. Outpost retries until its attempts run out, and `onEvent` never runs. |
+| This repo's test subscriber, and Outpost's `mcp-dev check` receiver | Accept the deliveries. |
 
 Receivers should deduplicate on `webhook-id`. A receiver that deduplicates on `eventId` must scope it to the subscription (`X-MCP-Subscription-Id`), because one event is delivered once per matching subscription.
+
+## Try it with ChatGPT
+
+Tested on 2026-11-13 with a ChatGPT Plus account, developer mode and **No Authentication**, against a self-hosted Outpost v1.9.0 on the same machine. It's a dev-only setup: anyone with the tunnel URL can use the server.
+
+1. Start the server with an anonymous principal: `ANONYMOUS_PRINCIPAL=chatgpt LOG_MCP_REQUESTS=true npm run server`.
+2. Expose it: `npm run tunnel -- --port 3000`, and copy the `/mcp` URL it prints. ChatGPT connects from OpenAI's cloud, and the MCP endpoint is request/response, so it needs a tunnel that passes responses through.
+3. In ChatGPT, go to [Plugins](https://chatgpt.com/plugins), choose **Add > Add custom MCP server**, paste the URL, choose **No authentication**, tick **I understand and want to continue**, select **Create as a plugin**, then **Connect**. ChatGPT calls `server/discover`, `tools/list` and `events/list`.
+4. Start a new chat in **ChatGPT** mode (not **Codex**), switch it to **Work** at the top, type `@`, pick the plugin, and ask: "Subscribe to high-value orders in USD. When one arrives, summarize the order in one sentence." ChatGPT calls `events/subscribe`, and Outpost verifies ChatGPT's callback. In Codex mode, ChatGPT only sees the tools and says it can't subscribe.
+5. Place orders with `npm run order`. The task runs appear under **Scheduled**.
+6. Delete the task in **Scheduled** to unsubscribe.
+
+What happened:
+
+| Step | Result |
+|---|---|
+| Subscribe | `events/subscribe` from `openai-mcp/1.0.0 (Codex)`; Outpost's challenge to ChatGPT's callback passed; ChatGPT replied "Subscribed to new Outpost Native Demo Store orders of $100 USD or more." |
+| Matching orders | 175 and 220 USD: Outpost got `200` on the first attempt for both |
+| Non-matching order | 30 USD: filtered out by Outpost, never sent |
+| Task run | One run covered both orders: "Order ord_b8a4d59bcb85 totalled $175.00 USD for one item…" and the 220 USD order, after a `get_order` tool call |
+| Unsubscribe | Deleting the task sent `events/unsubscribe`; a later 500 USD order matched no subscription |
 
 ## Where SEP-3415 and OpenAI's guide differ
 
 - **Error codes.** Outpost answers with SEP-3415's codes, for example `-32023` NotFound and `-32027` CallbackEndpointError. OpenAI's guide and the earlier design sketch use `-32011` and `-32015`. The server returns Outpost's.
 - **Unsubscribing an unknown subscription.** Outpost answers NotFound. OpenAI says unsubscribe is idempotent, so the server returns a success instead.
-- **`webhook-id`.** See [ChatGPT and `webhook-id`](#chatgpt-and-webhook-id).
+- **`webhook-id`.** See [`webhook-id` and other subscribers](#webhook-id-and-other-subscribers).
 - **Capability shape.** The server advertises `"events": {}` in `server/discover`, as OpenAI's guide shows.
 
 ## MCP protocol version and SDK

@@ -8,7 +8,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 - **OpenAI shipped MCP Events in ChatGPT on 2026-09-29 (DevDay)**, webhook mode only, with challenge verification. No poll, no stream, no `gap`/`terminated`. ChatGPT is the MCP client; its receiver runs in OpenAI's cloud (inferred, the docs use a placeholder host). The audience is MCP server builders publishing ChatGPT plugins.
 - **This demo:** an MCP server builder uses **Hookdeck Outpost** for MCP Events. Since Outpost v1.9.0 (2026-11-12), Outpost runs MCP Events natively (experimental): it serves `events/list` from its event definitions, verifies callbacks, stores and expires subscriptions, filters on arguments, and signs and delivers the MCP envelope. The server authenticates, maps the principal to a tenant, applies its TTL policy, forwards `events/*`, and publishes.
 - **History:** the first version (Oct 2026) built verification, expiry and filtering in the server on top of plain webhook destinations. It's at the `diy-webhook-destinations` tag; the README links it.
-- Goal of the demo: the reference implementation behind the guide, and a list of gaps for MCP Events.
+- Goal of the demo: the reference implementation the guide is built from, and a list of gaps for MCP Events.
 
 ## Key references
 
@@ -22,7 +22,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 
 - Rewritten for Outpost's native MCP Events (branch `feat/native-outpost-mcp-events`). `npm test` and `npm run typecheck` pass, offline against `test/mock-outpost.ts`, whose status codes and `mcp_error` bodies were checked against a local Outpost v1.9.0.
 - Run end to end against a self-hosted Outpost v1.9.0 (the Outpost repo's `make up/mcp` stack with this repo's `mcp-events.json`), and through Outpost's `mcp-dev check` in publish mode. README "Tests" has the commands.
-- **Not yet tested with ChatGPT.** Outpost's `webhook-id` is a random `msg_...` per delivery (SEP-3415); OpenAI's guide says it must equal `eventId`. README "ChatGPT and webhook-id".
+- **ChatGPT tested (2026-11-13):** subscribe, verification, delivery, a task run and unsubscribe all worked, although Outpost's `webhook-id` (a random `msg_...` per delivery) doesn't equal `eventId`. The **Vercel AI SDK** (`@ai-sdk/mcp` 2.0.99) answers `400` to every delivery for that reason. README "webhook-id and other subscribers" and "Try it with ChatGPT".
 - **Managed Outpost:** v1.9.0 is deployed, but the MCP Events settings and the `/mcp/...` routes through `api.outpost.hookdeck.com` come with hookdeck/core#6257 (open as of 2026-11-13). Until it deploys, only self-hosted works.
 - **Guide:** [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost), source in hookdeck/website (`src/content/outpost-guides/2026-10-07_send-mcp-events-webhooks-with-outpost.mdoc`). Its code is fragments of this repo, so update the guide when the code it shows changes.
 
@@ -41,15 +41,14 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 
 ## Next steps (in rough priority)
 
-1. **ChatGPT test** of this version, to find out whether ChatGPT accepts Outpost's `webhook-id`. Ask the user first; it needs their ChatGPT account and a tunnel for the MCP server.
-2. **Managed Outpost run** once hookdeck/core#6257 is deployed: `npm run outpost:check -- --apply`, then the quickstart with a tunnel.
-3. If ChatGPT rejects the deliveries: raise it with the Outpost team (hookdeck/outpost#1181 floated an opt-in `webhook-id = eventId` setting).
+1. **Managed Outpost run** once hookdeck/core#6257 is deployed: `npm run outpost:check -- --apply`, then the quickstart with a tunnel.
+2. **Vercel AI SDK compatibility:** raise with the Outpost team (hookdeck/outpost#1181 floated an opt-in `webhook-id = eventId` setting) or the AI SDK, whichever the user prefers.
 
 Ask the user before starting any of these.
 
 ## Outpost gaps this demo surfaced
 
-- `webhook-id` per delivery vs OpenAI's `webhook-id = eventId` (see above).
+- `webhook-id` per delivery vs OpenAI's `webhook-id = eventId`: ChatGPT accepts it, the Vercel AI SDK doesn't (see above).
 - Unsubscribe of an unknown subscription answers NotFound; OpenAI wants idempotent success (the server converts it).
 - `mcp-dev check` reports `headers.name-missing` (the server accepts a missing `Mcp-Name`) and `unsubscribe.not-found` (the idempotent unsubscribe) as failures. Both are deliberate.
 - Earlier gaps (410/413 retried, rotated secrets on busy destinations, SSRF on delivery) are closed by v1.9.0's MCP delivery or earlier releases; the old list is at the `diy-webhook-destinations` tag.
