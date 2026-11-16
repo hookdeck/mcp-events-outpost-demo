@@ -176,7 +176,7 @@ Without an `inputSchema`, Outpost would offer every top-level string, number, in
 
 Outpost's publish API takes exactly one `tenant_id`, and each principal is its own tenant. So when an order is placed, the demo store publishes one copy per tenant that has subscribed, and Outpost delivers each copy to that tenant's matching subscriptions. Outpost's idempotency key is the event ID across the whole project, so each tenant's copy gets its own ID (`evt_<orderId>_<tenant hash>`), which is also the `eventId` the subscriber sees.
 
-The server keeps the list of tenants that have subscribed in `data/tenants.json`. A tenant whose subscriptions have ended stays listed, and publishing to it matches nothing. Outpost's `GET /tenants` could replace the file, since a tenant's `topics` include the events it has subscriptions to, but on self-hosted Outpost it needs Redis with RediSearch.
+The server keeps the list of tenants that have subscribed in `data/tenants.json`. A tenant whose subscriptions have ended stays listed, and publishing to it matches nothing. If publishing to one tenant fails, the store logs it, lists the tenant under `failed` in the `/demo/orders` response, and carries on with the rest; a production server would retry it from a queue. Outpost's `GET /tenants` could replace the file, since a tenant's `topics` include the events it has subscriptions to, but on self-hosted Outpost it needs Redis with RediSearch.
 
 ## `webhook-id` and other subscribers
 
@@ -264,7 +264,8 @@ npm run typecheck   # tsc --noEmit
 - `test/secret.test.ts`: `whsec_` validation (24 to 64 bytes, strict base64) and generation.
 - `test/signing.test.ts`: signatures interoperate with the `standardwebhooks` library, including dual signatures during rotation, tampering, the 5-minute freshness window, and matching each signature entry to its secret.
 - `test/tunnel-url.test.ts`: the `.tunnel-url` file the client reads when `PUBLIC_CALLBACK_URL` is empty.
-- `test/e2e.test.ts`: the MCP server, the test subscriber, and `test/mock-outpost.ts`, a small HTTP server with Outpost's MCP routes and publish endpoint. The mock answers with the status codes and `mcp_error` bodies Outpost v1.9.0 answers, verifies callbacks, matches arguments and delivers signed envelopes. The test covers subscribe, the challenge, publish, signed delivery, verification, filtering, deduplication, forged and stale rejection, refresh with secret rotation and dual signing, unsubscribe, the lifetime policy, idempotency, and error passthrough.
+- `test/store.test.ts`: the tenant list file, including a clear error for a corrupt or wrongly shaped file.
+- `test/e2e.test.ts`: the MCP server, the test subscriber, and `test/mock-outpost.ts`, a small HTTP server with Outpost's MCP routes and publish endpoint. The mock answers with the status codes and `mcp_error` bodies Outpost v1.9.0 answers, verifies callbacks, matches arguments and delivers signed envelopes. The test covers subscribe, the challenge, publish, signed delivery, verification, filtering, deduplication, forged and stale rejection, refresh with secret rotation and dual signing, unsubscribe, the lifetime policy, idempotency, error passthrough, a non-JSON error page from a proxy, `events/list` pagination parameters, a failed publish to one tenant, and malformed `/demo/orders` bodies.
 
 ### Against a real Outpost
 
