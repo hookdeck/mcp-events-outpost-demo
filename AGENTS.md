@@ -23,7 +23,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 - Rewritten for Outpost's native MCP Events (branch `feat/native-outpost-mcp-events`). `npm test` and `npm run typecheck` pass, offline against `test/mock-outpost.ts`, whose status codes and `mcp_error` bodies were checked against a local Outpost v1.9.0.
 - Run end to end against a self-hosted Outpost v1.9.0 (the Outpost repo's `make up/mcp` stack with this repo's `mcp-events.json`), and through Outpost's `mcp-dev check` in publish mode. README "Tests" has the commands.
 - **ChatGPT tested (2026-11-13):** subscribe, verification, delivery, a task run and unsubscribe all worked, although Outpost's `webhook-id` (a random `msg_...` per delivery) doesn't equal `eventId`. The **Vercel AI SDK** (`@ai-sdk/mcp` 2.0.99) answers `400` to every delivery for that reason. README "webhook-id and other subscribers" and "Try it with ChatGPT".
-- **Managed Outpost:** v1.9.0 is deployed, but the MCP Events settings and the `/mcp/...` routes through `api.outpost.hookdeck.com` come with hookdeck/core#6257 (open as of 2026-11-13). Until it deploys, only self-hosted works.
+- **Managed Outpost tested (2026-11-16):** hookdeck/core#6257 shipped to production on 2026-11-14. On the demo's managed project, `outpost:check -- --apply` set `EXPERIMENTAL_MCP_ENABLED` and `EXPERIMENTAL_MCP_EVENTS_SCHEMA` (with `inputSchema`) through the Config API; subscribe, verification, delivery (150 USD delivered, 20 USD and 500 EUR filtered) and unsubscribe all worked. The dashboard's MCP Events settings page wasn't checked (no dashboard sign-in in the agent's browser).
 - **Guide:** [Send MCP Events Webhooks with Outpost](https://hookdeck.com/docs/outpost/guides/send-mcp-events-webhooks-with-outpost), source in hookdeck/website (`src/content/outpost-guides/2026-10-07_send-mcp-events-webhooks-with-outpost.mdoc`). Its code is fragments of this repo, so update the guide when the code it shows changes.
 
 ## Design decisions (keep unless there's a reason)
@@ -41,8 +41,7 @@ Context for agents continuing work on this repo. Read this, then `README.md` (ar
 
 ## Next steps (in rough priority)
 
-1. **Managed Outpost run** once hookdeck/core#6257 is deployed: `npm run outpost:check -- --apply`, then the quickstart with a tunnel.
-2. **Vercel AI SDK compatibility:** raise with the Outpost team (hookdeck/outpost#1181 floated an opt-in `webhook-id = eventId` setting) or the AI SDK, whichever the user prefers.
+1. **Vercel AI SDK compatibility:** raise with the Outpost team (hookdeck/outpost#1181 floated an opt-in `webhook-id = eventId` setting) or the AI SDK, whichever the user prefers.
 
 Ask the user before starting any of these.
 
