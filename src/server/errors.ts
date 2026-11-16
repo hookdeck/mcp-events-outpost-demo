@@ -9,7 +9,8 @@ export const EventsErrorCode = {
   InvalidParams: -32602,
   /** SEP-3415's NotFound, as Outpost answers it. */
   NotFound: -32023,
-  Forbidden: -32012,
+  /** SEP-3415's Forbidden. */
+  Forbidden: -32024,
   InternalError: -32603,
 } as const;
 
