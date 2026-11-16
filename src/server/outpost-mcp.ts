@@ -46,6 +46,7 @@ export class OutpostMcp {
 
   private async call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<McpResult> {
     let response: Response;
+    let text: string;
     try {
       response = await fetch(`${this.baseUrl}${path}`, {
         method,
@@ -54,19 +55,30 @@ export class OutpostMcp {
         // Subscribe waits for Outpost to verify the callback URL before it answers.
         signal: AbortSignal.timeout(40_000),
       });
+      // Read the body inside the try: the timeout can also fire while it streams.
+      text = await response.text();
     } catch (error) {
       this.log(`Outpost ${method} ${path} failed: ${(error as Error).message}`);
       throw new ProtocolError(EventsErrorCode.InternalError, 'Outpost is unreachable');
     }
 
-    const text = await response.text();
-    const json = text ? (JSON.parse(text) as unknown) : {};
+    // A proxy in front of Outpost can answer a 502 or 504 with an HTML page, so don't assume JSON.
+    let json: unknown = {};
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      // Not JSON: handled below by status code.
+    }
 
     // 200: the MCP result, returned as is.
-    if (response.ok) return json as McpResult;
+    if (response.ok) {
+      if (json && typeof json === 'object' && !Array.isArray(json)) return json as McpResult;
+      this.log(`Outpost ${method} ${path} answered HTTP ${response.status} with a body that isn't a JSON object`);
+      throw new ProtocolError(EventsErrorCode.InternalError, 'Internal error');
+    }
 
     // 422: an MCP Events error (invalid params, callback verification failed, rate limited, ...).
-    const mcpError = (json as McpErrorBody).mcp_error;
+    const mcpError = (json as McpErrorBody | null)?.mcp_error;
     if (mcpError) throw new ProtocolError(mcpError.code, mcpError.message, mcpError.data);
 
     // 404: MCP Events is off on this Outpost deployment. 503: the event definitions are

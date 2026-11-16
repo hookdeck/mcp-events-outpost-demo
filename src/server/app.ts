@@ -25,7 +25,7 @@ function mcpMethod(req: http.IncomingMessage): string {
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 /** Reads a JSON request body, or returns undefined when it isn't valid JSON or is too large. */
-async function readJson(req: http.IncomingMessage): Promise<unknown> {
+async function readJson(req: http.IncomingMessage, options: { allowEmpty?: boolean } = {}): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -33,6 +33,7 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
     if (size > MAX_MCP_BODY_BYTES) return undefined;
     chunks.push(chunk as Buffer);
   }
+  if (size === 0 && options.allowEmpty) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
@@ -96,10 +97,11 @@ export function createApp(config: ServerConfig, options: { log?: (message: strin
       }
 
       if (pathname === '/demo/orders' && req.method === 'POST') {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
-        const input = (chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}) as PlaceOrderInput;
-        return json(res, 201, await demoStore.placeOrder(input));
+        const input = await readJson(req, { allowEmpty: true });
+        if (input === undefined || typeof input !== 'object' || Array.isArray(input)) {
+          return json(res, 400, { error: 'body must be a JSON object of at most 1 MB' });
+        }
+        return json(res, 201, await demoStore.placeOrder(input as PlaceOrderInput));
       }
 
       if (pathname === '/healthz') return json(res, 200, { ok: true });

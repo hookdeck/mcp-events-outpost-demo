@@ -31,7 +31,8 @@ export class SubscriptionService {
 
   list(params: Record<string, unknown> | undefined): Promise<McpResult> {
     const cursor = typeof params?.cursor === 'string' ? params.cursor : undefined;
-    return this.deps.outpost.listEvents({ cursor });
+    const limit = typeof params?.limit === 'number' && Number.isInteger(params.limit) && params.limit > 0 ? params.limit : undefined;
+    return this.deps.outpost.listEvents({ cursor, limit });
   }
 
   async subscribe(principal: string | undefined, params: Record<string, unknown>): Promise<McpResult> {
@@ -51,7 +52,9 @@ export class SubscriptionService {
       return result;
     } catch (error) {
       // Outpost answers NotFound for a subscription that doesn't exist. OpenAI's guide
-      // asks for an idempotent unsubscribe, so treat it as already removed.
+      // asks for an idempotent unsubscribe, so treat it as already removed. Outpost v1.9.0
+      // sends {"code":-32023,"message":"NotFound","data":{"kind":"subscription"}} for this
+      // case and data.kind "event" for an unknown event name, which must stay an error.
       const notFound =
         error instanceof ProtocolError &&
         error.code === EventsErrorCode.NotFound &&

@@ -203,6 +203,36 @@ describe('MCP Events with Outpost, end to end', () => {
     }
   });
 
+  it('reports a non-JSON error page from a proxy in front of Outpost as an internal error', async () => {
+    const client = await rawClient('tok-bob');
+    outpost.listStatus = 502;
+    outpost.listHtml = '<html><body>502 Bad Gateway</body></html>';
+    try {
+      const error = await client.request({ method: 'events/list', params: {} } as never, anyResult).catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: -32603, message: expect.stringContaining('Internal error') });
+      // The parser's message must not leak to the client.
+      expect(String((error as Error).message)).not.toMatch(/Unexpected token|JSON/);
+    } finally {
+      outpost.listStatus = 200;
+      outpost.listHtml = undefined;
+      await client.close();
+    }
+  });
+
+  it('forwards events/list cursor and limit to Outpost', async () => {
+    const client = await rawClient('tok-bob');
+    await client.request({ method: 'events/list', params: { cursor: 'c1', limit: 2 } } as never, anyResult);
+    expect(outpost.listQueries.at(-1)).toBe('?cursor=c1&limit=2');
+    await client.close();
+  });
+
+  it('answers 400 to a malformed /demo/orders body and accepts an empty one', async () => {
+    const bad = await fetch(`${storeUrl}/demo/orders`, { method: 'POST', body: '{not json' });
+    expect(bad.status).toBe(400);
+    const empty = await fetch(`${storeUrl}/demo/orders`, { method: 'POST' });
+    expect(empty.status).toBe(201);
+  });
+
   it('rejects unauthenticated MCP requests', async () => {
     await expect(rawClient('wrong-token')).rejects.toThrow();
   });

@@ -28,7 +28,12 @@ const baseUrl = (process.env.OUTPOST_API_BASE_URL || DEFAULT_OUTPOST_API_BASE_UR
 const headers = { Authorization: `Bearer ${apiKey}` };
 
 async function check(): Promise<boolean> {
-  const response = await fetch(`${baseUrl}/mcp/events/list`, { headers });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/mcp/events/list`, { headers });
+  } catch (error) {
+    throw new Error(`Couldn't reach Outpost at ${baseUrl} (${(error as Error).message}). Check OUTPOST_API_BASE_URL.`);
+  }
   if (response.status === 404) {
     console.log('MCP Events: off (GET /mcp/events/list answered 404). Outpost v1.9.0 or later with EXPERIMENTAL_MCP_ENABLED=true is required.');
     return false;

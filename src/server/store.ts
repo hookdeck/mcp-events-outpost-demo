@@ -16,7 +16,16 @@ export class TenantRegistry {
 
   constructor(private readonly file: string | null) {
     if (file && fs.existsSync(file)) {
-      for (const id of JSON.parse(fs.readFileSync(file, 'utf8')) as string[]) this.tenants.add(id);
+      let ids: unknown;
+      try {
+        ids = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch (error) {
+        throw new Error(`${file} isn't valid JSON (${(error as Error).message}). Fix or delete it; it only lists tenants to publish to.`);
+      }
+      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
+        throw new Error(`${file} must be a JSON array of tenant IDs. Fix or delete it.`);
+      }
+      for (const id of ids) this.tenants.add(id);
     }
   }
 

@@ -75,6 +75,10 @@ export class MockOutpost {
   readonly verifications: string[] = [];
   /** Answer GET /mcp/events/list with this status instead (404 = MCP Events off, 503 = invalid definitions). */
   listStatus = 200;
+  /** With listStatus set, answer with this HTML body instead of JSON, like a proxy's error page. */
+  listHtml?: string;
+  /** Query strings GET /mcp/events/list was called with. */
+  readonly listQueries: string[] = [];
   private readonly verified = new Set<string>();
   private readonly seenEventIds = new Set<string>();
   private readonly server: http.Server;
@@ -114,6 +118,11 @@ export class MockOutpost {
 
     try {
       if (req.method === 'GET' && url.pathname === '/mcp/events/list') {
+        this.listQueries.push(url.search);
+        if (this.listStatus !== 200 && this.listHtml !== undefined) {
+          res.writeHead(this.listStatus, { 'content-type': 'text/html' }).end(this.listHtml);
+          return;
+        }
         if (this.listStatus !== 200) return send(this.listStatus, { message: 'unavailable' });
         return send(200, { resultType: 'complete', ...definitions });
       }
