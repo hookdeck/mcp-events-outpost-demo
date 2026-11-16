@@ -79,6 +79,8 @@ export class MockOutpost {
   listHtml?: string;
   /** Query strings GET /mcp/events/list was called with. */
   readonly listQueries: string[] = [];
+  /** Tenants whose publishes answer 500, to simulate a failed publish. */
+  readonly failPublishFor = new Set<string>();
   private readonly verified = new Set<string>();
   private readonly seenEventIds = new Set<string>();
   private readonly server: http.Server;
@@ -131,7 +133,10 @@ export class MockOutpost {
         if (parts[4] === 'subscribe') return send(200, await this.subscribe(tenantId, body));
         if (parts[4] === 'unsubscribe') return send(200, this.unsubscribe(tenantId, body));
       }
-      if (req.method === 'POST' && url.pathname === '/publish') return send(202, this.publish(body as PublishRequest));
+      if (req.method === 'POST' && url.pathname === '/publish') {
+        if (this.failPublishFor.has((body as PublishRequest).tenant_id)) return send(500, { message: 'simulated publish failure' });
+        return send(202, this.publish(body as PublishRequest));
+      }
     } catch (error) {
       if (error instanceof McpError) {
         return send(422, { mcp_error: { code: error.code, message: error.message, ...(error.data && { data: error.data }) } });

@@ -41,7 +41,7 @@ export class DemoStore {
     return this.orders.get(orderId);
   }
 
-  async placeOrder(input: PlaceOrderInput): Promise<{ order: Order; published: PublishedCopy[] }> {
+  async placeOrder(input: PlaceOrderInput): Promise<{ order: Order; published: PublishedCopy[]; failed: string[] }> {
     const total = input.total ?? Math.round(Math.random() * 20000) / 100;
     const order: Order = {
       orderId: `ord_${randomBytes(6).toString('hex')}`,
@@ -55,19 +55,27 @@ export class DemoStore {
     this.orders.set(order.orderId, order);
 
     const published: PublishedCopy[] = [];
+    const failed: string[] = [];
     for (const tenantId of this.subscriptions.tenantIds()) {
       const eventId = `evt_${order.orderId}_${createHash('sha256').update(tenantId).digest('hex').slice(0, 8)}`;
-      const response = await this.outpost.publish({
-        id: eventId,
-        tenantId,
-        topic: ORDER_CREATED,
-        eligibleForRetry: true,
-        time: new Date(order.createdAt),
-        data: { ...order },
-      });
-      published.push({ tenantId, ...response });
-      this.log(`published ${eventId} to ${tenantId}: ${response.destinationIds.length} matching subscription(s)`);
+      try {
+        const response = await this.outpost.publish({
+          id: eventId,
+          tenantId,
+          topic: ORDER_CREATED,
+          eligibleForRetry: true,
+          time: new Date(order.createdAt),
+          data: { ...order },
+        });
+        published.push({ tenantId, ...response });
+        this.log(`published ${eventId} to ${tenantId}: ${response.destinationIds.length} matching subscription(s)`);
+      } catch (error) {
+        // One tenant's failure shouldn't stop the rest. A production server would
+        // retry it from a queue; the demo logs it and reports it in the response.
+        failed.push(tenantId);
+        this.log(`publishing ${eventId} to ${tenantId} failed: ${(error as Error).message}`);
+      }
     }
-    return { order, published };
+    return { order, published, failed };
   }
 }

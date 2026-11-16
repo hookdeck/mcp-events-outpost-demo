@@ -226,6 +226,25 @@ describe('MCP Events with Outpost, end to end', () => {
     await client.close();
   });
 
+  it('keeps publishing to other tenants when one tenant fails', async () => {
+    const alice = new Subscriber({ serverUrl, token: 'tok-alice', eventName: 'order.created', log: () => {} });
+    const bob = new Subscriber({ serverUrl, token: 'tok-bob', eventName: 'order.created', log: () => {} });
+    await alice.start();
+    await bob.start();
+    outpost.failPublishFor.add('mcp_alice');
+    try {
+      const response = await fetch(`${storeUrl}/demo/orders`, { method: 'POST', body: JSON.stringify({ total: 10 }) });
+      const result = (await response.json()) as { published: Array<{ tenantId: string }>; failed: string[] };
+      expect(response.status).toBe(201);
+      expect(result.failed).toEqual(['mcp_alice']);
+      expect(result.published.map((p) => p.tenantId)).toContain('mcp_bob');
+    } finally {
+      outpost.failPublishFor.clear();
+      await alice.stop();
+      await bob.stop();
+    }
+  });
+
   it('answers 400 to a malformed /demo/orders body and accepts an empty one', async () => {
     const bad = await fetch(`${storeUrl}/demo/orders`, { method: 'POST', body: '{not json' });
     expect(bad.status).toBe(400);
