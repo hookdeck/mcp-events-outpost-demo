@@ -10,8 +10,8 @@ try {
 
 const { values } = parseArgs({
   options: {
-    'min-total': { type: 'string' },
     currency: { type: 'string' },
+    'high-value': { type: 'boolean' },
     'ttl-ms': { type: 'string' },
     'rotate-secret': { type: 'boolean', default: false },
     'skip-timestamp-check': { type: 'boolean', default: false },
@@ -23,8 +23,8 @@ const { values } = parseArgs({
 });
 
 const args: Record<string, unknown> = {};
-if (values['min-total'] !== undefined) args.minTotal = Number(values['min-total']);
 if (values.currency !== undefined) args.currency = values.currency;
+if (values['high-value'] !== undefined) args.highValue = values['high-value'];
 
 const token = process.env.MCP_TOKEN;
 if (!token) throw new Error('MCP_TOKEN is not set (see .env.example)');

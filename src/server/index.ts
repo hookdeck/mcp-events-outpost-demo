@@ -15,9 +15,6 @@ console.log(`[server] MCP endpoint:      http://localhost:${port}/mcp`);
 console.log(`[server] Demo order trigger: POST http://localhost:${port}/demo/orders  (or: npm run order)`);
 console.log(`[server] Outpost API:        ${config.outpost.baseUrl}`);
 console.log(`[server] Principals:         ${[...new Set(config.tokens.values())].join(', ')}`);
-if (config.allowLocalCallbacks) {
-  console.warn('[server] ALLOW_LOCAL_CALLBACKS=true: http and private callback addresses are allowed. Dev only.');
-}
 
 const shutdown = async () => {
   await app.close();

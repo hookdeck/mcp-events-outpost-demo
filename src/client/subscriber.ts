@@ -284,8 +284,9 @@ export class Subscriber {
     }
     this.seenIds.add(webhookId);
 
+    // webhook-id identifies this delivery (one event on one subscription) and stays the same across
+    // retries, so it's the deduplication key. It isn't the event's eventId.
     const event = body as unknown as McpEvent;
-    if (event.eventId !== webhookId) this.log(`warning: eventId ${event.eventId} does not match webhook-id ${webhookId}`);
     this.events.push(event);
     this.log(`event ${event.name} ${event.eventId}: ${JSON.stringify(event.data)}`);
     this.options.onEvent?.(event, req.headers);
