@@ -10,5 +10,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src", "scripts", "test"]
+  "include": ["src", "scripts", "test"],
+  "exclude": ["src/clients"]
 }
