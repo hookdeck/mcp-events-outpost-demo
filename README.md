@@ -186,6 +186,7 @@ Outpost sets `webhook-id` to a random `msg_...` value per delivery (one event on
 |---|---|
 | ChatGPT | Accepts the deliveries (`200`) and runs the task. See [Try it with ChatGPT](#try-it-with-chatgpt). |
 | Vercel AI SDK (`@ai-sdk/mcp` 2.0.99, `experimental_createMCPEventWebhook`) | Passes the verification challenge, then answers `400` to every event, because it requires `eventId` to equal `webhook-id`. Outpost retries until its attempts run out, and `onEvent` never runs. |
+| Mastra (`@mastra/mcp` 2.10.0) | Accepts the deliveries (`200`) and hands each occurrence to the subscriber. Example in [src/clients/mastra](src/clients/mastra). |
 | This repo's test subscriber, and Outpost's `mcp-dev check` receiver | Accept the deliveries. |
 
 Receivers should deduplicate on `webhook-id`. A receiver that deduplicates on `eventId` must scope it to the subscription (`X-MCP-Subscription-Id`), because one event is delivered once per matching subscription.
@@ -310,6 +311,8 @@ src/
   client/
     index.ts       entry point (npm run client)
     subscriber.ts  MCP client + webhook receiver
+  clients/
+    mastra/        Mastra (@mastra/mcp) subscriber, its own package (see its README)
 scripts/
   order.ts         npm run order
   tunnel.ts        npm run tunnel (dev quick tunnel)

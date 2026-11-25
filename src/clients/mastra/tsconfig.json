@@ -1,0 +1,5 @@
+{
+  "extends": "../../../tsconfig.json",
+  "include": ["subscriber.ts"],
+  "exclude": ["node_modules"]
+}
