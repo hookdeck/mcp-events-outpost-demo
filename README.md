@@ -254,6 +254,12 @@ The receiver has to answer the verification challenge with the challenge in its 
 
 Everything is documented in [`.env.example`](.env.example). `MCP_TOKENS` maps demo bearer tokens to principals (`dev-token-alice=alice,dev-token-bob=bob`).
 
+## Other subscribers
+
+`src/clients/` holds subscriber examples for MCP clients other than the test subscriber in `src/client/`. Each is self-contained, with its own README.
+
+- **[Hermes Agent](src/clients/hermes-agent/README.md)** (v0.23.4): Hermes's webhook listener receives the deliveries through an Event Gateway `MCP_EVENTS` source, and each one starts an agent run. Hermes accepts Outpost's per-message `webhook-id`. It doesn't send an `Mcp-Name` header on `events/subscribe`.
+
 ## Tests
 
 ```sh
