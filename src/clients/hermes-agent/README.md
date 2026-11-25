@@ -21,7 +21,15 @@ Outpost --signed delivery--> Event Gateway MCP_EVENTS source --hookdeck listen--
 - The demo's own setup (steps 1 and 2 of the main README): `npm install`, `OUTPOST_API_KEY`, and `npm run outpost:check`.
 - `HOOKDECK_API_KEY` for an Event Gateway project, in `.env`. Use a throwaway project: the example creates one source and one connection.
 - [`uv`](https://docs.astral.sh/uv/) and git.
-- A model provider for Hermes, if you want the agent runs to complete. Put its key in `.hermes-example/home/.env` (for example `ANTHROPIC_API_KEY=...`, with `model:` set in `config.yaml`, or run `hermes model`). Without one, deliveries still arrive and are acknowledged, and the agent run fails.
+- A model provider for Hermes, if you want the agent runs to complete. Without one, deliveries still arrive and are acknowledged, and each agent run fails. For Anthropic, `hermes:install` already installs the provider extra. After `npm run hermes:setup`, add the key to `.hermes-example/home/.env` (a line `ANTHROPIC_API_KEY=...`, so it stays out of the repo and your shell history) and put this at the top of `.hermes-example/home/config.yaml`:
+
+  ```yaml
+  model:
+    default: "claude-haiku-4-5"
+    provider: "anthropic"
+  ```
+
+  Or run `HERMES_HOME=.hermes-example/home .hermes-example/venv/bin/hermes model` to pick another provider interactively.
 
 ## Run it
 
@@ -38,9 +46,9 @@ HERMES_HOME=.hermes-example/home .hermes-example/venv/bin/python -I \
 npm run order -- --total 150 --currency USD  # 5. place an order
 ```
 
-`hookdeck listen` needs the Hookdeck CLI logged in to the same project as `HOOKDECK_API_KEY`, or run it with that key set.
+`hookdeck listen` needs the Hookdeck CLI logged in to the same project as `HOOKDECK_API_KEY`. If it is on another project, the source still accepts each delivery but nothing is forwarded (the request shows as ignored in the dashboard, `hookdeck listen` prints nothing and Hermes logs nothing). Point it at the right project with `--hookdeck-config <file>`.
 
-**Success:** `subscribe.py` prints `subscribe: {"subscribed": ...}`; after the order, `.hermes-example/home/logs/gateway.log` has `POST event=... delivery=mcp-event:evt_ord_...` and `inbound message: platform=webhook`; `hookdeck listen` shows `[202]`.
+**Success:** `subscribe.py` prints `subscribe: {"subscribed": ...}`; after the order, `.hermes-example/home/logs/gateway.log` has `POST event=... delivery=mcp-event:evt_ord_...` and `inbound message: platform=webhook`; `hookdeck listen` shows `[202]`. With a model configured, the same log then shows `response ready` a few seconds later (about 5 s with `claude-haiku-4-5`), with the one-sentence summary as the agent's reply.
 
 Ctrl+C in `subscribe.py` unsubscribes. `npm run hermes:setup -- --delete` removes the Event Gateway connection.
 
