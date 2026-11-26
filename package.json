@@ -14,8 +14,6 @@
     "order": "tsx scripts/order.ts",
     "outpost:check": "tsx scripts/outpost-check.ts",
     "tunnel": "tsx scripts/tunnel.ts",
-    "hermes:install": "sh src/clients/hermes-agent/install.sh",
-    "hermes:setup": "tsx src/clients/hermes-agent/setup.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
