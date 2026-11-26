@@ -1,0 +1,16 @@
+{
+  "name": "mcp-events-outpost-demo-vercel-ai-sdk",
+  "private": true,
+  "type": "module",
+  "description": "Vercel AI SDK (@ai-sdk/mcp) subscribing to the demo server's order.created events by webhook.",
+  "scripts": {
+    "start": "tsx subscriber.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/mcp": "2.0.105"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15"
+  }
+}

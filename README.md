@@ -185,7 +185,7 @@ Outpost sets `webhook-id` to a random `msg_...` value per delivery (one event on
 | Subscriber | Result |
 |---|---|
 | ChatGPT | Accepts the deliveries (`200`) and runs the task. See [Try it with ChatGPT](#try-it-with-chatgpt). |
-| Vercel AI SDK (`@ai-sdk/mcp` 2.0.99, `experimental_createMCPEventWebhook`) | Passes the verification challenge, then answers `400` to every event, because it requires `eventId` to equal `webhook-id`. Outpost retries until its attempts run out, and `onEvent` never runs. |
+| Vercel AI SDK (`@ai-sdk/mcp`, `experimental_createMCPEventWebhook`) | 2.0.104 and earlier answer `400` to every event because they require `eventId` to equal `webhook-id`, so `onEvent` never runs (the verification challenge passes). 2.0.105 and later (fix [vercel/ai#25451](https://github.com/vercel/ai/pull/25451)) accept the deliveries (`204`) and run `onEvent`; observed 2026-11-26 with Outpost 1.11 on 2.0.105 and 2.0.106. Example in [src/clients/vercel-ai-sdk](src/clients/vercel-ai-sdk). |
 | Mastra (`@mastra/mcp` 2.10.0) | Accepts the deliveries (`200`) and hands each occurrence to the subscriber. Example in [src/clients/mastra](src/clients/mastra). |
 | This repo's test subscriber, and Outpost's `mcp-dev check` receiver | Accept the deliveries. |
 
@@ -255,6 +255,12 @@ The receiver has to answer the verification challenge with the challenge in its 
 
 Everything is documented in [`.env.example`](.env.example). `MCP_TOKENS` maps demo bearer tokens to principals (`dev-token-alice=alice,dev-token-bob=bob`).
 
+## Other subscribers
+
+`src/clients/` holds subscriber examples for MCP clients other than the test subscriber in `src/client/`. Each is self-contained, with its own README.
+
+- **[Vercel AI SDK](src/clients/vercel-ai-sdk/README.md)** (`@ai-sdk/mcp` 2.0.105 or later): `experimental_createMCPEventWebhook` receives the deliveries through an Event Gateway `MCP_EVENTS` source. Earlier versions answer `400` to every event.
+
 ## Tests
 
 ```sh
@@ -313,6 +319,7 @@ src/
     subscriber.ts  MCP client + webhook receiver
   clients/
     mastra/        Mastra (@mastra/mcp) subscriber, its own package (see its README)
+    vercel-ai-sdk/ Vercel AI SDK (@ai-sdk/mcp) subscriber, its own package (see its README)
 scripts/
   order.ts         npm run order
   tunnel.ts        npm run tunnel (dev quick tunnel)
