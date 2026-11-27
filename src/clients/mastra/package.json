@@ -1,0 +1,18 @@
+{
+  "name": "mcp-events-outpost-demo-mastra",
+  "private": true,
+  "type": "module",
+  "description": "Mastra (@mastra/mcp) subscribing to the demo server's order.created events by webhook.",
+  "scripts": {
+    "start": "tsx subscriber.ts"
+  },
+  "dependencies": {
+    "@mastra/core": "1.86.0",
+    "@mastra/mcp": "2.10.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15"
+  }
+}
