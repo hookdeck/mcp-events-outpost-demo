@@ -66,29 +66,46 @@ It calls `GET /mcp/events/list` and reports whether MCP Events is on and offers 
 
 ### 3. Run it
 
-Outpost has to reach the subscriber's receiver, so the receiver needs a URL Outpost can connect to. Outpost only delivers to `https` URLs on public addresses, so use a tunnel. Use four terminals:
+Outpost has to reach the subscriber's receiver. It only delivers to `https` URLs on public addresses, so the receiver needs a public URL. Use [Hookdeck Event Gateway](https://hookdeck.com/docs/event-gateway): a source of type `MCP_EVENTS` answers Outpost's verification challenge itself and verifies deliveries with one signing secret you choose, and the [Hookdeck CLI](https://hookdeck.com/docs/cli) forwards them to your machine.
 
-```sh
-npm run tunnel                                   # 1. public URL for the receiver
-npm run server                                   # 2. the MCP server
-npm run client -- --currency USD --high-value    # 3. the test subscriber
-```
+1. Install the Hookdeck CLI and run `hookdeck login`.
+2. Create the source and a CLI destination, with a signing secret:
 
-Then place some orders in a fourth terminal:
+   ```sh
+   export SUBSCRIBER_SECRET=whsec_$(openssl rand -base64 32)
+   hookdeck gateway connection create --name mcp-events-demo \
+     --source-type MCP_EVENTS --source-name mcp-events-demo \
+     --source-webhook-secret "$SUBSCRIBER_SECRET" \
+     --destination-type CLI --destination-name mcp-events-demo-cli
+   ```
 
-```sh
-npm run order -- --total 150 --currency USD    # delivered
-npm run order -- --total 20 --currency USD     # filtered out by Outpost
-npm run order -- --total 500 --currency EUR    # filtered out by Outpost
-```
+3. Forward the source to the receiver (port 4000 by default). It prints the source URL, `https://hkdk.events/<source-id>`:
+
+   ```sh
+   hookdeck listen 4000 mcp-events-demo
+   ```
+
+4. In two more terminals, start the server and the test subscriber with that URL and the same secret:
+
+   ```sh
+   npm run server
+   npm run client -- --currency USD --high-value --callback-url https://hkdk.events/<source-id> --secret "$SUBSCRIBER_SECRET"
+   ```
+
+5. Place some orders in a fourth terminal:
+
+   ```sh
+   npm run order -- --total 150 --currency USD    # delivered
+   npm run order -- --total 20 --currency USD     # filtered out by Outpost
+   npm run order -- --total 500 --currency EUR    # filtered out by Outpost
+   ```
 
 The client output looks like this:
 
 ```text
-[client] receiver listening on :4000, callback URL https://<random>.trycloudflare.com/mcp-events/...
+[client] receiver listening on :4000, callback URL https://hkdk.events/<source-id>
 [client] connected, protocol 2026-07-28
 [client] events/list offers: order.created
-[client] answered verification challenge (msg_verification_...)
 [client] subscribed sub_..., refreshBefore 2026-11-13T19:06:53Z
 [client] waiting for events. Place an order with `npm run order`. Ctrl+C to unsubscribe and exit.
 [client] event order.created evt_ord_..._...: {"orderId":"ord_...","total":150,"currency":"USD","highValue":true,...}
@@ -96,18 +113,20 @@ The client output looks like this:
 
 Only the 150 USD order arrives.
 
-To run without a tunnel against a self-hosted Outpost on the same machine, start Outpost with `EXPERIMENTAL_MCP_ALLOW_INSECURE_CALLBACKS=true` (development only) and allow the address Outpost reaches your machine at in `DESTINATIONS_PRIVATE_ADDRESS_ALLOWLIST`. With Outpost in Docker, set `PUBLIC_CALLBACK_URL=http://host.docker.internal:4000` for the client and allowlist the address `host.docker.internal` resolves to inside the container.
+An Event Gateway source has one signing secret, so a client that creates its own secret for each subscription can't use one yet. For the test subscriber without `--callback-url` (it generates its own secret, and `--rotate-secret` needs that), start `npm run tunnel` first instead. It opens a Cloudflare quick tunnel to the receiver and the client picks up its URL; see [The tunnel](#the-tunnel).
+
+To run without a public URL against a self-hosted Outpost on the same machine, start Outpost with `EXPERIMENTAL_MCP_ALLOW_INSECURE_CALLBACKS=true` (development only) and allow the address Outpost reaches your machine at in `DESTINATIONS_PRIVATE_ADDRESS_ALLOWLIST`. With Outpost in Docker, set `PUBLIC_CALLBACK_URL=http://host.docker.internal:4000` for the client and allowlist the address `host.docker.internal` resolves to inside the container.
 
 ### 4. Stop
 
-Press Ctrl+C in the client. It unsubscribes, and Outpost deletes the subscription. Then stop the tunnel and the server.
+Press Ctrl+C in the client. It unsubscribes, and Outpost deletes the subscription. Then stop `hookdeck listen` and the server. To remove the Event Gateway resources, delete the `mcp-events-demo` connection, source and destination in the [dashboard](https://dashboard.hookdeck.com).
 
 ### Troubleshooting
 
 - **`outpost:check` says MCP Events is off.** Outpost answers `404` on its MCP routes while `EXPERIMENTAL_MCP_ENABLED` isn't `true`, and before v1.9.0.
 - **`outpost:check` says the definitions are invalid.** Outpost starts anyway and answers `503` on its MCP routes. Its logs name the event and the field.
-- **`subscribe failed` with code `-32602`.** Outpost rejected the request: for example an `http` or private callback URL (start `npm run tunnel` before the client), an argument that isn't in `inputSchema`, or a malformed secret.
-- **`subscribe failed` with code `-32027` (CallbackEndpointError).** Outpost couldn't complete the verification challenge; `data.reason` says why (for example `connection_refused` or `http_5xx`). Check the tunnel is still running. If it was killed without exiting cleanly, `.tunnel-url` may point at a dead URL: delete it and restart the tunnel.
+- **`subscribe failed` with code `-32602`.** Outpost rejected the request: for example an `http` or private callback URL (use the `https://hkdk.events/<source-id>` URL from step 3, or start `npm run tunnel` before a client without `--callback-url`), an argument that isn't in `inputSchema`, or a malformed secret.
+- **`subscribe failed` with code `-32027` (CallbackEndpointError).** Outpost couldn't complete the verification challenge; `data.reason` says why (for example `connection_refused` or `http_5xx`). Check `hookdeck listen` is still running, and that it runs in the project the source belongs to (`hookdeck project use`). With `npm run tunnel`, check the tunnel is still running: if it was killed without exiting cleanly, `.tunnel-url` may point at a dead URL, so delete it and restart the tunnel. If deliveries are dropped, check the client's `--secret` matches the one the source was created with.
 - **Subscribed, but no events arrive.** Check the order matches the arguments you subscribed with: `--high-value` only matches orders of 100 or more.
 - **`OUTPOST_API_KEY is not set`.** Copy `.env.example` to `.env` and set the key.
 
@@ -196,7 +215,7 @@ Receivers should deduplicate on `webhook-id`. A receiver that deduplicates on `e
 Tested on 2026-11-13 with a ChatGPT Plus account, developer mode and **No Authentication**, against a self-hosted Outpost v1.9.0 on the same machine. It's a dev-only setup: anyone with the tunnel URL can use the server.
 
 1. Start the server with an anonymous principal: `ANONYMOUS_PRINCIPAL=chatgpt LOG_MCP_REQUESTS=true npm run server`.
-2. Expose it: `npm run tunnel -- --port 3000`, and copy the `/mcp` URL it prints. ChatGPT connects from OpenAI's cloud, and the MCP endpoint is request/response, so it needs a tunnel that passes responses through.
+2. Expose it: `npm run tunnel -- --port 3000`, and copy the `/mcp` URL it prints. ChatGPT connects from OpenAI's cloud, and the MCP endpoint is request/response, so it needs a tunnel that passes responses through. An Event Gateway source can't do that, so this is where the Cloudflare tunnel stays.
 3. In ChatGPT, go to [Plugins](https://chatgpt.com/plugins), choose **Add > Add custom MCP server**, paste the URL, choose **No authentication**, tick **I understand and want to continue**, select **Create as a plugin**, then **Connect**. ChatGPT calls `server/discover`, `tools/list` and `events/list`.
 4. Start a new chat in **ChatGPT** mode (not **Codex**), switch it to **Work** at the top, type `@`, pick the plugin, and ask: "Subscribe to high-value orders in USD. When one arrives, summarize the order in one sentence." ChatGPT calls `events/subscribe`, and Outpost verifies ChatGPT's callback. In Codex mode, ChatGPT only sees the tools and says it can't subscribe.
 5. Place orders with `npm run order`. The task runs appear under **Scheduled**.
@@ -234,9 +253,9 @@ What happened:
 
 ### The tunnel
 
-`npm run tunnel` uses the [`cloudflared`](https://www.npmjs.com/package/cloudflared) package (a dev dependency), which downloads the `cloudflared` binary on first run. A quick tunnel needs no Cloudflare account and gets a random `https://<random>.trycloudflare.com` URL each time. The script writes that URL to `.tunnel-url` (gitignored) and removes it on exit. `npm run client` uses it when `PUBLIC_CALLBACK_URL` is empty.
+`npm run tunnel` is for the ChatGPT MCP endpoint and for a subscriber that creates its own secret (see step 3). It uses the [`cloudflared`](https://www.npmjs.com/package/cloudflared) package (a dev dependency), which downloads the `cloudflared` binary on first run. A quick tunnel needs no Cloudflare account and gets a random `https://<random>.trycloudflare.com` URL each time. The script writes that URL to `.tunnel-url` (gitignored) and removes it on exit. `npm run client` uses it when `PUBLIC_CALLBACK_URL` is empty.
 
-The receiver has to answer the verification challenge with the challenge in its response body, so it needs a tunnel that passes the response through. An Event Gateway source answers with a fixed response, so `hookdeck listen` can't front the receiver, except through an `MCP_EVENTS` source, which answers the challenge itself (see `--callback-url` below). To expose the MCP server instead, for example so ChatGPT can connect to it, pass `--port`: `npm run tunnel -- --port 3000` prints the `/mcp` URL and doesn't touch `.tunnel-url`.
+The receiver has to answer the verification challenge with the challenge in its response body, so a tunnel in front of it must pass the response through. An Event Gateway source answers with a fixed response, so `hookdeck listen` can't front the receiver, except through an `MCP_EVENTS` source, which answers the challenge itself (step 3). To expose the MCP server instead, for example so ChatGPT can connect to it, pass `--port`: `npm run tunnel -- --port 3000` prints the `/mcp` URL and doesn't touch `.tunnel-url`.
 
 ### Client options
 
