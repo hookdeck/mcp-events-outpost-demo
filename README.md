@@ -66,7 +66,7 @@ It calls `GET /mcp/events/list` and reports whether MCP Events is on and offers 
 
 ### 3. Run it
 
-Outpost has to reach the subscriber's receiver. It only delivers to `https` URLs on public addresses, so the receiver needs a public URL. Use [Hookdeck Event Gateway](https://hookdeck.com/docs/event-gateway): a source of type `MCP_EVENTS` answers Outpost's verification challenge itself and verifies deliveries with one signing secret you choose, and the [Hookdeck CLI](https://hookdeck.com/docs/cli) forwards them to your machine.
+Outpost has to reach the subscriber's receiver. It only delivers to `https` URLs on public addresses, so the receiver needs a public URL. Use Hookdeck Event Gateway: a [source](https://hookdeck.com/docs/sources) of type `MCP_EVENTS` answers Outpost's verification challenge itself and verifies deliveries with one signing secret you choose, and the [Hookdeck CLI](https://hookdeck.com/docs/cli) forwards them to your machine.
 
 1. Install the Hookdeck CLI and run `hookdeck login`.
 2. Create the source and a CLI destination, with a signing secret:
